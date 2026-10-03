@@ -1,0 +1,6 @@
+{
+  "name": "فضفضه — Fadfada",
+  "description": "منصة التواصل والمحادثات الاجتماعية العربية المتكاملة، دردشة فورية وغرف حوارية راقية.",
+  "requestFramePermissions": ["CAMERA", "MICROPHONE"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
