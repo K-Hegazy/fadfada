@@ -12,6 +12,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   updateCoins: (amount: number) => void;
+  setUnreadMessagesCount: (count: number) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,6 +44,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     refreshUser();
   }, []);
+
+  // Real-time unread messages sync over WebSocket
+  useEffect(() => {
+    if (!user) return;
+
+    const unsubUnread = socketService.on('unread_count:update', (data: any) => {
+      if (typeof data?.unreadMessages === 'number') {
+        setUser(prev => prev ? { ...prev, unreadMessages: data.unreadMessages } : null);
+      }
+    });
+
+    const unsubNewMsg = socketService.on('new_private_message', (data: any) => {
+      if (typeof data?.unreadCount === 'number') {
+        setUser(prev => prev ? { ...prev, unreadMessages: data.unreadCount } : null);
+      }
+    });
+
+    return () => {
+      unsubUnread();
+      unsubNewMsg();
+    };
+  }, [user?.id]);
+
+  const setUnreadMessagesCount = (count: number) => {
+    setUser(prev => prev ? { ...prev, unreadMessages: Math.max(0, count) } : null);
+  };
 
   const login = async (username: string, password: string) => {
     const res = await apiRequest<{ token: string; user: User }>('/auth/login', {
@@ -99,7 +126,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         guestLogin,
         logout,
         refreshUser,
-        updateCoins
+        updateCoins,
+        setUnreadMessagesCount
       }}
     >
       {children}

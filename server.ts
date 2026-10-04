@@ -2666,6 +2666,18 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req: Request, res
     );
     saveDb();
 
+    // Broadcast updated unread count to current user
+    const remainingUnread = queryOne(
+      db,
+      "SELECT COUNT(*) as c FROM private_messages WHERE recipient_id = ? AND is_read = 0",
+      [session.userId]
+    )?.c || 0;
+
+    sendToUser(session.userId, {
+      type: 'unread_count:update',
+      unreadMessages: remainingUnread
+    });
+
     const limit = Math.min(100, Math.max(10, parseInt(req.query.limit as string) || 60));
     const before = req.query.before as string;
     let sql = `SELECT m.*, u.username as sender_username, u.avatar_url as sender_avatar
@@ -2882,14 +2894,44 @@ app.post('/api/conversations/:id/messages', requireAuth, messageSendRateLimiter,
       [recipientId, session.userId]
     );
 
+    // Fetch sender profile details and updated unread count for notifications
+    const senderUser = queryOne(db, "SELECT username, avatar_url, role FROM users WHERE id = ?", [session.userId]);
+    const unreadCount = queryOne(
+      db,
+      "SELECT COUNT(*) as c FROM private_messages WHERE recipient_id = ? AND is_read = 0",
+      [recipientId]
+    )?.c || 1;
+
     // Send real-time message to recipient
     sendToUser(recipientId, {
       ...messageObj,
       silent: !!isMuted
     });
 
+    // Send new_private_message dedicated event for instant notification toasts
+    sendToUser(recipientId, {
+      type: 'new_private_message',
+      messageId: msgId,
+      conversationId: convId,
+      senderId: session.userId,
+      senderUsername: senderUser?.username || session.username,
+      senderAvatar: senderUser?.avatar_url || '',
+      senderRole: senderUser?.role || session.role || 'user',
+      preview: msgType === 'image' ? '📷 أرسل لك صورة' : (msgType === 'audio' ? '🎤 أرسل تسجيلاً صوتياً' : (content || '').slice(0, 80)),
+      msgType: msgType,
+      createdAt: new Date().toISOString(),
+      unreadCount,
+      silent: !!isMuted
+    });
+
+    // Broadcast updated unread count to recipient
+    sendToUser(recipientId, {
+      type: 'unread_count:update',
+      unreadMessages: unreadCount
+    });
+
     if (!isMuted) {
-      // Send live toast alert to recipient
+      // Send live toast alert to recipient (backward compatible)
       sendToUser(recipientId, {
         type: 'toast:new',
         toast: {
@@ -2897,7 +2939,8 @@ app.post('/api/conversations/:id/messages', requireAuth, messageSendRateLimiter,
           type: 'message',
           title: session.username,
           body: msgType === 'image' ? '📷 أرسل لك صورة' : (msgType === 'audio' ? '🎤 أرسل تسجيلاً صوتياً' : (content || '').slice(0, 60)),
-          senderId: session.userId
+          senderId: session.userId,
+          avatarUrl: senderUser?.avatar_url || ''
         }
       });
     }

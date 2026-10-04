@@ -43,6 +43,58 @@ function AppContent() {
   // Side Panel Chat State for 'المتصلون الآن'
   const [onlineChatTargetUser, setOnlineChatTargetUser] = useState<OnlineUserItem | null>(null);
 
+  // Keep track of active chat recipient globally for notification suppression
+  React.useEffect(() => {
+    if (currentTab === 'online' && onlineChatTargetUser) {
+      (window as any).__fadfada_active_chat_user_id = onlineChatTargetUser.id;
+    } else if (currentTab === 'messages' && chatRecipientId) {
+      (window as any).__fadfada_active_chat_user_id = chatRecipientId;
+    } else {
+      (window as any).__fadfada_active_chat_user_id = null;
+    }
+  }, [currentTab, onlineChatTargetUser, chatRecipientId]);
+
+  React.useEffect(() => {
+    const handleOpenChat = async (e: any) => {
+      const targetUserId = e.detail?.userId;
+      if (!targetUserId) return;
+
+      try {
+        const res = await apiRequest<{ profile: any }>(`/users/${targetUserId}`);
+        if (res && res.profile) {
+          setOnlineChatTargetUser({
+            id: res.profile.id,
+            username: res.profile.username,
+            role: res.profile.role,
+            gender: res.profile.gender || 'male',
+            country: res.profile.country || 'السعودية',
+            bio: res.profile.bio || '',
+            avatarUrl: res.profile.avatarUrl || '',
+            level: res.profile.level || 0,
+            vipLevel: res.profile.vipLevel || 'none',
+            isOnline: !!res.profile.isOnline,
+            interests: res.profile.interests || [],
+            isPinned: !!res.profile.isPinned,
+            equippedBadge: res.profile.equippedBadge,
+            equippedFrame: res.profile.equippedFrame,
+            isGuest: !!res.profile.isGuest
+          });
+          setCurrentTab('online');
+          setSelectedProfileId(null);
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to open chat from event:', err);
+      }
+
+      setChatRecipientId(targetUserId);
+      setCurrentTab('messages');
+    };
+
+    window.addEventListener('open_chat_with_user', handleOpenChat);
+    return () => window.removeEventListener('open_chat_with_user', handleOpenChat);
+  }, []);
+
   React.useEffect(() => {
     const handleOpenLegal = (e: any) => {
       setLegalModalTab(e.detail?.tab || 'terms');

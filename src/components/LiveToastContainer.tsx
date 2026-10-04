@@ -1,8 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { socketService } from '../services/socket';
 import { playNotificationSound, SoundType } from '../services/sound';
-import { MessageSquare, Gift, UserPlus, X, Bell } from 'lucide-react';
+import { OwnerBadge, isUserOwner } from './OwnerBadge';
+import {
+  MessageCircle,
+  Gift,
+  UserPlus,
+  X,
+  Bell,
+  ArrowLeft,
+  ChevronLeft
+} from 'lucide-react';
 
 export interface ToastItem {
   id: string;
@@ -11,6 +20,9 @@ export interface ToastItem {
   body: string;
   avatarUrl?: string;
   senderId?: string;
+  senderUsername?: string;
+  senderRole?: string;
+  unreadCount?: number;
   linkTab?: string;
   data?: any;
 }
@@ -18,32 +30,54 @@ export interface ToastItem {
 export const LiveToastContainer: React.FC = () => {
   const { user } = useAuth();
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const seenMessageIdsRef = useRef<Set<string>>(new Set());
 
-  // Get user sound preferences
+  // Sound preferences
   const soundPref = (user?.notificationSound || localStorage.getItem('fadfada_sound') || 'chime') as SoundType;
   const soundEnabled = user?.soundEnabled !== undefined ? user.soundEnabled : (localStorage.getItem('fadfada_sound_enabled') !== 'false');
-
-  const addToast = (toast: Omit<ToastItem, 'id'>) => {
-    const id = 'tst_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    const newToast: ToastItem = { ...toast, id };
-
-    setToasts(prev => [newToast, ...prev.slice(0, 3)]); // Keep at most 4 toasts visible
-
-    // Play customizable live notification sound
-    playNotificationSound(soundPref, soundEnabled);
-
-    // Auto dismiss after 6 seconds
-    setTimeout(() => {
-      removeToast(id);
-    }, 6000);
-  };
 
   const removeToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
+  const addToast = (toast: Omit<ToastItem, 'id'>, dedupeKey?: string) => {
+    if (dedupeKey) {
+      if (seenMessageIdsRef.current.has(dedupeKey)) return;
+      seenMessageIdsRef.current.add(dedupeKey);
+      if (seenMessageIdsRef.current.size > 200) {
+        // Keep set size manageable
+        const first = seenMessageIdsRef.current.values().next().value;
+        if (first) seenMessageIdsRef.current.delete(first);
+      }
+    }
+
+    const id = 'tst_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const newToast: ToastItem = { ...toast, id };
+
+    setToasts(prev => [newToast, ...prev.slice(0, 2)]); // Keep at most 3 toasts visible to prevent visual clutter
+
+    // Play subtle chime sound
+    playNotificationSound(soundPref, soundEnabled);
+
+    // Browser Notification (optional, if user gave permission previously)
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(toast.title, {
+          body: toast.body,
+          icon: toast.avatarUrl || '/favicon.ico',
+          dir: 'rtl'
+        });
+      } catch {}
+    }
+
+    // Auto dismiss after 5 seconds
+    setTimeout(() => {
+      removeToast(id);
+    }, 5000);
+  };
+
   useEffect(() => {
-    // Listen to custom window toast events
+    // 1. Custom window toast event listener
     const handleCustomToast = (e: any) => {
       if (e.detail) {
         addToast(e.detail);
@@ -51,34 +85,59 @@ export const LiveToastContainer: React.FC = () => {
     };
     window.addEventListener('fadfada-toast', handleCustomToast);
 
-    // Listen to WebSocket events
-    const unbindMessage = socketService.on('private_message', (data: any) => {
-      // Don't show toast if message is sent by current user or marked silent (muted)
-      if (data && data.senderId !== user?.id && !data.silent) {
-        addToast({
+    // 2. Real-time private message notifications (dedicated event)
+    const unbindNewPrivateMsg = socketService.on('new_private_message', (data: any) => {
+      if (!data) return;
+
+      // Check if user is currently inside active chat with this sender
+      const activeChatUserId = (window as any).__fadfada_active_chat_user_id;
+      if (activeChatUserId && activeChatUserId === data.senderId) {
+        // User is already looking at this chat! Do NOT show toast.
+        return;
+      }
+
+      // Check if message is from myself or muted
+      if (data.senderId === user?.id || data.silent) return;
+
+      addToast(
+        {
           type: 'message',
-          title: `رسالة جديدة من ${data.senderName || 'صديق'} 💬`,
-          body: data.type === 'image' ? '📷 أرسل صورة' : (data.content || 'رسالة جديدة'),
+          title: data.senderUsername || 'رسالة جديدة',
+          body: data.preview || 'أرسل لك رسالة جديدة',
           avatarUrl: data.senderAvatar,
           senderId: data.senderId,
-          linkTab: 'messages'
-        });
-      }
+          senderUsername: data.senderUsername,
+          senderRole: data.senderRole,
+          unreadCount: data.unreadCount,
+          linkTab: 'online'
+        },
+        data.messageId
+      );
     });
 
-    const unbindToastNew = socketService.on('toast:new', (data: any) => {
-      if (data?.toast && !data.silent) {
-        addToast({
-          type: data.toast.type || 'message',
-          title: data.toast.title || 'إشعار جديد',
-          body: data.toast.body || '',
-          avatarUrl: data.toast.avatarUrl,
-          senderId: data.toast.senderId,
-          linkTab: data.toast.type === 'message' ? 'messages' : 'notifications'
-        });
+    // 3. Fallback: message:new event (if not caught by new_private_message)
+    const unbindMessageNew = socketService.on('message:new', (data: any) => {
+      const msg = data?.message;
+      if (!msg || msg.senderId === user?.id || data.silent) return;
+
+      const activeChatUserId = (window as any).__fadfada_active_chat_user_id;
+      if (activeChatUserId && activeChatUserId === msg.senderId) {
+        return;
       }
+
+      addToast(
+        {
+          type: 'message',
+          title: 'رسالة خاصة جديدة 💬',
+          body: msg.type === 'image' ? '📷 أرسل لك صورة' : (msg.type === 'audio' ? '🎤 تسجيل صوتي' : (msg.content || '').slice(0, 60)),
+          senderId: msg.senderId,
+          linkTab: 'online'
+        },
+        msg.id
+      );
     });
 
+    // 4. Gift notifications
     const unbindGift = socketService.on('gift_received', (data: any) => {
       addToast({
         type: 'gift',
@@ -89,6 +148,7 @@ export const LiveToastContainer: React.FC = () => {
       });
     });
 
+    // 5. Friend request notifications
     const unbindFriendReq = socketService.on('friend_request', (data: any) => {
       addToast({
         type: 'friend_request',
@@ -101,18 +161,32 @@ export const LiveToastContainer: React.FC = () => {
 
     return () => {
       window.removeEventListener('fadfada-toast', handleCustomToast);
-      unbindMessage();
-      unbindToastNew();
+      unbindNewPrivateMsg();
+      unbindMessageNew();
       unbindGift();
       unbindFriendReq();
     };
   }, [user?.id, soundPref, soundEnabled]);
 
   const handleToastClick = (toast: ToastItem) => {
+    removeToast(toast.id);
+
+    if (toast.type === 'message' && toast.senderId) {
+      // Trigger instant chat opening in OnlineChatPanel (or MessagesPage)
+      window.dispatchEvent(
+        new CustomEvent('open_chat_with_user', {
+          detail: {
+            userId: toast.senderId,
+            username: toast.senderUsername
+          }
+        })
+      );
+      return;
+    }
+
     if (toast.linkTab) {
       window.dispatchEvent(new CustomEvent('navigate-tab', { detail: toast.linkTab }));
     }
-    removeToast(toast.id);
   };
 
   if (toasts.length === 0) return null;
@@ -120,61 +194,69 @@ export const LiveToastContainer: React.FC = () => {
   return (
     <div
       dir="rtl"
-      className="fixed bottom-20 md:bottom-6 left-2 sm:left-4 right-2 sm:right-auto sm:max-w-sm z-50 flex flex-col gap-2 pointer-events-none select-none"
+      className="fixed bottom-20 md:bottom-6 left-3 right-3 sm:left-auto sm:right-6 sm:max-w-sm z-50 flex flex-col gap-2.5 pointer-events-none select-none"
     >
       {toasts.map(t => {
-        let icon = <Bell className="w-5 h-5 text-emerald-400" />;
-        let borderClass = 'border-emerald-500/40';
-        let bgGradient = 'from-neutral-900 via-neutral-900 to-emerald-950/40';
-
-        if (t.type === 'message') {
-          icon = <MessageSquare className="w-5 h-5 text-sky-400" />;
-          borderClass = 'border-sky-500/40';
-          bgGradient = 'from-neutral-900 via-neutral-900 to-sky-950/40';
-        } else if (t.type === 'gift') {
-          icon = <Gift className="w-5 h-5 text-amber-400" />;
-          borderClass = 'border-amber-500/40';
-          bgGradient = 'from-neutral-900 via-neutral-900 to-amber-950/40';
-        } else if (t.type === 'friend_request') {
-          icon = <UserPlus className="w-5 h-5 text-purple-400" />;
-          borderClass = 'border-purple-500/40';
-          bgGradient = 'from-neutral-900 via-neutral-900 to-purple-950/40';
-        }
+        const isMsg = t.type === 'message';
+        const isGift = t.type === 'gift';
+        const isFriend = t.type === 'friend_request';
+        const isOwner = isUserOwner({ role: t.senderRole, username: t.senderUsername });
 
         return (
           <div
             key={t.id}
             onClick={() => handleToastClick(t)}
-            className={`pointer-events-auto cursor-pointer p-3.5 rounded-2xl bg-gradient-to-l ${bgGradient} border ${borderClass} shadow-2xl shadow-black/80 flex items-start gap-3 transform transition-all duration-300 hover:scale-[1.02] animate-in fade-in slide-in-from-bottom-2`}
+            className="pointer-events-auto cursor-pointer p-3 sm:p-3.5 rounded-2xl bg-[#0e111a]/95 backdrop-blur-md border border-emerald-500/50 hover:border-emerald-400 shadow-2xl shadow-black/90 flex items-center justify-between gap-3 transform transition-all duration-300 hover:scale-[1.02] active:scale-98 animate-in fade-in slide-in-from-bottom-3"
           >
-            {t.avatarUrl ? (
-              <img
-                src={t.avatarUrl}
-                alt=""
-                className="w-10 h-10 rounded-xl object-cover border border-neutral-700 shrink-0"
-              />
-            ) : (
-              <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center shrink-0 border border-neutral-700">
-                {icon}
+            {/* Sender Avatar / Icon with Online beacon */}
+            <div className="relative shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-neutral-800 border border-neutral-700/80 flex items-center justify-center font-bold text-white overflow-hidden shadow-inner">
+                {t.avatarUrl ? (
+                  <img src={t.avatarUrl} alt="" className="w-full h-full object-cover" />
+                ) : isMsg ? (
+                  <MessageCircle className="w-5 h-5 text-emerald-400" />
+                ) : isGift ? (
+                  <Gift className="w-5 h-5 text-amber-400" />
+                ) : isFriend ? (
+                  <UserPlus className="w-5 h-5 text-purple-400" />
+                ) : (
+                  <Bell className="w-5 h-5 text-neutral-300" />
+                )}
               </div>
-            )}
-
-            <div className="flex-1 min-w-0 pr-1">
-              <div className="text-xs font-bold text-white font-cairo flex items-center justify-between">
-                <span>{t.title}</span>
-                <span className="text-[10px] text-neutral-400 font-normal">الآن</span>
-              </div>
-              <p className="text-xs text-neutral-300 font-tajawal truncate mt-0.5">
-                {t.body}
-              </p>
+              <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-neutral-900 rounded-full animate-pulse" />
             </div>
 
+            {/* Notification content */}
+            <div className="flex-1 min-w-0 pr-0.5">
+              <div className="flex items-center gap-1.5 truncate">
+                <span className="text-xs font-bold text-white font-cairo truncate">
+                  {t.title}
+                </span>
+                {isOwner && <OwnerBadge size="xs" />}
+                <span className="text-[10px] text-neutral-400 font-tajawal shrink-0 mr-auto">
+                  الآن
+                </span>
+              </div>
+
+              <p className="text-[11px] text-neutral-300 font-tajawal truncate mt-0.5 leading-snug">
+                {t.body}
+              </p>
+
+              {/* Action hint */}
+              <div className="flex items-center gap-1 text-[10px] text-emerald-400 font-tajawal font-bold mt-1">
+                <span>اضغط لفتح المحادثة فوراً</span>
+                <ChevronLeft className="w-3 h-3" />
+              </div>
+            </div>
+
+            {/* Close button */}
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 removeToast(t.id);
               }}
-              className="text-neutral-400 hover:text-white p-1 rounded-lg hover:bg-neutral-800 transition-colors"
+              className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800/80 transition-colors shrink-0 cursor-pointer"
+              title="إغلاق الإشعار"
             >
               <X className="w-3.5 h-3.5" />
             </button>
