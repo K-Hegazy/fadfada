@@ -1,73 +1,264 @@
 import React, { useState, useEffect } from 'react';
 import { apiRequest } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { socketService } from '../services/socket';
 import {
   Sparkles,
   HelpCircle,
   Dices,
-  Gift,
-  Check,
-  Flame,
-  RefreshCw,
-  Users,
-  Send,
-  MessageSquare,
   RotateCw,
   Trophy,
-  UserCheck
+  Coins,
+  Check,
+  X as XIcon,
+  Circle,
+  RefreshCw,
+  Award
 } from 'lucide-react';
+
+type GameTab = 'tictactoe' | 'wheel' | 'quiz';
 
 export const GamesPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
-  const [activeGame, setActiveGame] = useState<'wheel' | 'quiz' | 'truth'>('wheel');
+  const [activeGame, setActiveGame] = useState<GameTab>('tictactoe');
+  const [gameMessage, setGameMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  // Lucky Wheel state
+  // ==========================================
+  // 1. TIC TAC TOE (X & O) WITH COINS
+  // ==========================================
+  const [ttoStake, setTtoStake] = useState<number>(20);
+  const [board, setBoard] = useState<(string | null)[]>(Array(9).fill(null));
+  const [isXNext, setIsXNext] = useState<boolean>(true);
+  const [gameStarted, setGameStarted] = useState<boolean>(false);
+  const [gameOver, setGameOver] = useState<boolean>(false);
+  const [winner, setWinner] = useState<string | null>(null); // 'X', 'O', 'draw'
+  const [playingWithAi, setPlayingWithAi] = useState<boolean>(true);
+  const [ttoProcessing, setTtoProcessing] = useState<boolean>(false);
+
+  const calculateWinner = (squares: (string | null)[]) => {
+    const lines = [
+      [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+      [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
+      [0, 4, 8], [2, 4, 6]             // diagonals
+    ];
+    for (let i = 0; i < lines.length; i++) {
+      const [a, b, c] = lines[i];
+      if (squares[a] && squares[a] === squares[b] && squares[a] === squares[c]) {
+        return squares[a];
+      }
+    }
+    if (squares.every(s => s !== null)) return 'draw';
+    return null;
+  };
+
+  const handleStartTtoGame = async () => {
+    if ((user?.coins || 0) < ttoStake) {
+      setGameMessage({
+        text: `رصيد الكوينز غير كافٍ. تحتاج إلى ${ttoStake} كوينز للمشاركة.`,
+        type: 'error'
+      });
+      return;
+    }
+
+    setTtoProcessing(true);
+    setGameMessage(null);
+
+    try {
+      // Deduct entry coins
+      await apiRequest('/games/entry', {
+        method: 'POST',
+        body: JSON.stringify({ game: 'tictactoe', stake: ttoStake })
+      });
+
+      if (refreshUser) await refreshUser();
+
+      setBoard(Array(9).fill(null));
+      setIsXNext(true);
+      setGameStarted(true);
+      setGameOver(false);
+      setWinner(null);
+    } catch (e: any) {
+      console.error(e);
+      // Fallback local start
+      setBoard(Array(9).fill(null));
+      setIsXNext(true);
+      setGameStarted(true);
+      setGameOver(false);
+      setWinner(null);
+    } finally {
+      setTtoProcessing(false);
+    }
+  };
+
+  const handleCellClick = (index: number) => {
+    if (!gameStarted || gameOver || board[index] || ttoProcessing) return;
+
+    const newBoard = [...board];
+    newBoard[index] = isXNext ? 'X' : 'O';
+    setBoard(newBoard);
+
+    const winResult = calculateWinner(newBoard);
+    if (winResult) {
+      finishTtoGame(winResult);
+      return;
+    }
+
+    if (playingWithAi) {
+      setIsXNext(false);
+      // Trigger Smart AI Move
+      setTimeout(() => {
+        makeAiMove(newBoard);
+      }, 400);
+    } else {
+      setIsXNext(!isXNext);
+    }
+  };
+
+  const makeAiMove = (currentBoard: (string | null)[]) => {
+    // 1. Can AI Win?
+    const emptyIndices = currentBoard
+      .map((val, idx) => (val === null ? idx : null))
+      .filter((val): val is number => val !== null);
+
+    if (emptyIndices.length === 0) return;
+
+    let chosenIndex: number | null = null;
+
+    // Check winning move for AI ('O')
+    for (const idx of emptyIndices) {
+      const copy = [...currentBoard];
+      copy[idx] = 'O';
+      if (calculateWinner(copy) === 'O') {
+        chosenIndex = idx;
+        break;
+      }
+    }
+
+    // Check blocking move against Player ('X')
+    if (chosenIndex === null) {
+      for (const idx of emptyIndices) {
+        const copy = [...currentBoard];
+        copy[idx] = 'X';
+        if (calculateWinner(copy) === 'X') {
+          chosenIndex = idx;
+          break;
+        }
+      }
+    }
+
+    // Center preference
+    if (chosenIndex === null && currentBoard[4] === null) {
+      chosenIndex = 4;
+    }
+
+    // Random choice if no immediate tactic
+    if (chosenIndex === null) {
+      chosenIndex = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
+    }
+
+    const nextBoard = [...currentBoard];
+    nextBoard[chosenIndex] = 'O';
+    setBoard(nextBoard);
+
+    const winResult = calculateWinner(nextBoard);
+    if (winResult) {
+      finishTtoGame(winResult);
+    } else {
+      setIsXNext(true);
+    }
+  };
+
+  const finishTtoGame = async (winResult: string) => {
+    setGameOver(true);
+    setWinner(winResult);
+
+    if (winResult === 'X') {
+      const reward = ttoStake * 2;
+      setGameMessage({
+        text: `🎉 مبروك! فزت بالمباراة وحصلت على ${reward} كوينز!`,
+        type: 'success'
+      });
+      try {
+        await apiRequest('/games/win', {
+          method: 'POST',
+          body: JSON.stringify({ game: 'tictactoe', amount: reward })
+        });
+        if (refreshUser) await refreshUser();
+      } catch (e) {
+        console.error(e);
+      }
+    } else if (winResult === 'draw') {
+      setGameMessage({
+        text: `تعادل! تم استرداد رسوم الرهان (${ttoStake} كوينز).`,
+        type: 'info'
+      });
+      try {
+        await apiRequest('/games/win', {
+          method: 'POST',
+          body: JSON.stringify({ game: 'tictactoe', amount: ttoStake })
+        });
+        if (refreshUser) await refreshUser();
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      setGameMessage({
+        text: `حظ أوفر في الجولة القادمة! لقد فاز الذكاء الاصطناعي (O).`,
+        type: 'error'
+      });
+    }
+  };
+
+  // ==========================================
+  // 2. LUCKY WHEEL WITH COINS
+  // ==========================================
   const [spinning, setSpinning] = useState<boolean>(false);
   const [wheelResult, setWheelResult] = useState<string | null>(null);
+  const WHEEL_COST = 20;
 
-  // Quiz state
+  const handleSpinWheel = async () => {
+    if (spinning) return;
+    if ((user?.coins || 0) < WHEEL_COST) {
+      setGameMessage({
+        text: `تحتاج إلى ${WHEEL_COST} كوينز لتدوير عجلة الحظ.`,
+        type: 'error'
+      });
+      return;
+    }
+
+    setSpinning(true);
+    setWheelResult(null);
+    setGameMessage(null);
+
+    try {
+      const res = await apiRequest<{ prize: string; coinsEarned: number; xpEarned: number }>('/games/spin-wheel', {
+        method: 'POST',
+        body: JSON.stringify({ cost: WHEEL_COST })
+      });
+
+      setTimeout(async () => {
+        setSpinning(false);
+        setWheelResult(res.prize);
+        setGameMessage({
+          text: `🎉 مبروك! ربحت: ${res.prize}`,
+          type: 'success'
+        });
+        if (refreshUser) await refreshUser();
+      }, 2500);
+    } catch (e: any) {
+      setSpinning(false);
+      setGameMessage({ text: e.message || 'فشل تدوير العجلة', type: 'error' });
+    }
+  };
+
+  // ==========================================
+  // 3. PROVERBS & CULTURAL QUIZ WITH COINS
+  // ==========================================
   const [quiz, setQuiz] = useState<any>(null);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [quizAnswered, setQuizAnswered] = useState<boolean>(false);
   const [quizResult, setQuizResult] = useState<any>(null);
-
-  // Truth or Dare
-  const TRUTH_PROMPTS = [
-    'ما هي أكثر تجربة شخصية غيرت نظرتك للحياة بالكامل؟',
-    'ما هي الصفة التي تتمنى أن تغيرها في شخصيتك بصراحة؟',
-    'ما هو أكثر موقف شعرت فيه بالفخر بنفسك مؤخراً؟',
-    'ما هي الكلمة أو النصيحة التي لا تنساها من شخص عزيز؟',
-    'لو أتيحت لك فرصة الاعتذار لشخص ما من ماضيك، من سيكون؟',
-    'ما هو الشيء الذي يسعدك مهما كان يومك صعباً ومزدحماً؟'
-  ];
-
-  const DARE_PROMPTS = [
-    'أرسل رسالة شكر وتقدير راقية لأول صديق يظهر لك في المتصلين الآن.',
-    'اكتب قصة ملهمة جديدة في قسم القصص تعبر عن خاطرة تفاؤلية.',
-    'أرسل هدية رمزية (وردة أو قهوة) لشخص لا تعرفه جيداً لإسعاده.',
-    'شارك مثلاً شعبياً عربياً في المجلس الحواري المفضل لديك.'
-  ];
-
-  const [currentPrompt, setCurrentPrompt] = useState<string>('اختر صراحة أو جرأة لبدء اللعبة!');
-  const [promptType, setPromptType] = useState<'truth' | 'dare' | null>(null);
-  const [currentPromptItem, setCurrentPromptItem] = useState<any>(null);
-  const [promptLoading, setPromptLoading] = useState<boolean>(false);
-  const [completedReward, setCompletedReward] = useState<string | null>(null);
-  const [completing, setCompleting] = useState<boolean>(false);
-
-  // Multiplayer Truth or Dare state
-  const [todMode, setTodMode] = useState<'solo' | 'multiplayer'>('solo');
-  const [todMultiState, setTodMultiState] = useState<any>({
-    players: [],
-    turnUserId: null,
-    targetUserId: null,
-    state: 'waiting'
-  });
-  const [bottleAngle, setBottleAngle] = useState<number>(0);
-  const [isBottleSpinning, setIsBottleSpinning] = useState<boolean>(false);
-  const [multiAnswerInput, setMultiAnswerInput] = useState<string>('');
-  const [recentReactions, setRecentReactions] = useState<{ id: string; emoji: string; username: string }[]>([]);
+  const QUIZ_COST = 15;
+  const QUIZ_REWARD = 35;
 
   const fetchQuiz = async () => {
     try {
@@ -87,556 +278,336 @@ export const GamesPage: React.FC = () => {
     }
   }, [activeGame]);
 
-  useEffect(() => {
-    if (activeGame === 'truth' && todMode === 'multiplayer') {
-      socketService.send({ type: 'game:tod_join' });
+  const handleAnswerQuiz = async (optionIndex: number) => {
+    if (quizAnswered || !quiz) return;
 
-      const unsubState = socketService.on('game:tod_state', (data: any) => {
-        if (data && data.state) {
-          setTodMultiState(data.state);
-        }
+    if ((user?.coins || 0) < QUIZ_COST) {
+      setGameMessage({
+        text: `تحتاج إلى ${QUIZ_COST} كوينز للإجابة على التحدي.`,
+        type: 'error'
       });
-
-      const unsubSpun = socketService.on('game:tod_spun', (data: any) => {
-        setIsBottleSpinning(true);
-        setBottleAngle(prev => prev + (data.angle || 1440));
-        setTimeout(() => setIsBottleSpinning(false), 2600);
-      });
-
-      const unsubReact = socketService.on('game:tod_reaction', (data: any) => {
-        const id = 'rx_' + Date.now() + Math.random().toString(36).substring(2, 6);
-        setRecentReactions(prev => [...prev.slice(-4), { id, emoji: data.reaction, username: data.username }]);
-        setTimeout(() => {
-          setRecentReactions(prev => prev.filter(r => r.id !== id));
-        }, 3000);
-      });
-
-      return () => {
-        socketService.send({ type: 'game:tod_leave' });
-        unsubState();
-        unsubSpun();
-        unsubReact();
-      };
+      return;
     }
-  }, [activeGame, todMode]);
 
-  const handleMultiSpin = () => {
-    socketService.send({ type: 'game:tod_spin' });
-  };
-
-  const handleMultiChoice = (choice: 'truth' | 'dare') => {
-    socketService.send({ type: 'game:tod_choose', choice });
-  };
-
-  const handleMultiAnswerSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!multiAnswerInput.trim()) return;
-    socketService.send({ type: 'game:tod_answer', answer: multiAnswerInput });
-    setMultiAnswerInput('');
-  };
-
-  const sendReaction = (reaction: string) => {
-    socketService.send({ type: 'game:tod_reaction', reaction });
-  };
-
-  const handleSpinWheel = async () => {
-    setSpinning(true);
-    setWheelResult(null);
-    try {
-      const res = await apiRequest('/games/lucky-wheel', { method: 'POST' });
-      setTimeout(() => {
-        setSpinning(false);
-        setWheelResult(res.message);
-        refreshUser();
-      }, 1500);
-    } catch (err: any) {
-      setSpinning(false);
-      alert(err.message || 'تعذر تدوير العجلة');
-    }
-  };
-
-  const handleQuizAnswer = async (optIdx: number) => {
-    if (quizAnswered) return;
-    setSelectedOption(optIdx);
+    setSelectedOption(optionIndex);
     setQuizAnswered(true);
+
     try {
-      const res = await apiRequest('/games/proverbs-quiz/answer', {
+      const res = await apiRequest<{ correct: boolean; reward: number; explanation: string }>('/games/proverbs-quiz/answer', {
         method: 'POST',
-        body: JSON.stringify({ quizId: quiz.id, answerIndex: optIdx })
+        body: JSON.stringify({
+          questionId: quiz.id,
+          selectedOption: optionIndex,
+          cost: QUIZ_COST,
+          reward: QUIZ_REWARD
+        })
       });
+
       setQuizResult(res);
       if (res.correct) {
-        refreshUser();
+        setGameMessage({
+          text: `🎯 إجابة صحيحة! حصلت على ${res.reward || QUIZ_REWARD} كوينز!`,
+          type: 'success'
+        });
+      } else {
+        setGameMessage({
+          text: `إجابة خاطئة! حظ أوفر في السؤال التالي.`,
+          type: 'error'
+        });
       }
+      if (refreshUser) await refreshUser();
     } catch (e) {
       console.error(e);
     }
   };
 
-  const pickTruth = async () => {
-    setPromptLoading(true);
-    setCompletedReward(null);
-    try {
-      const res = await apiRequest<{ item: any }>('/games/truth-or-dare/item?type=truth');
-      setCurrentPrompt(res.item.question);
-      setCurrentPromptItem(res.item);
-      setPromptType('truth');
-    } catch {
-      const p = TRUTH_PROMPTS[Math.floor(Math.random() * TRUTH_PROMPTS.length)];
-      setCurrentPrompt(p);
-      setCurrentPromptItem(null);
-      setPromptType('truth');
-    } finally {
-      setPromptLoading(false);
-    }
-  };
-
-  const pickDare = async () => {
-    setPromptLoading(true);
-    setCompletedReward(null);
-    try {
-      const res = await apiRequest<{ item: any }>('/games/truth-or-dare/item?type=dare');
-      setCurrentPrompt(res.item.question);
-      setCurrentPromptItem(res.item);
-      setPromptType('dare');
-    } catch {
-      const p = DARE_PROMPTS[Math.floor(Math.random() * DARE_PROMPTS.length)];
-      setCurrentPrompt(p);
-      setCurrentPromptItem(null);
-      setPromptType('dare');
-    } finally {
-      setPromptLoading(false);
-    }
-  };
-
-  const completeChallenge = async () => {
-    if (!currentPromptItem) return;
-    setCompleting(true);
-    try {
-      const res = await apiRequest<{ success: boolean; message: string }>('/games/truth-or-dare/complete', {
-        method: 'POST',
-        body: JSON.stringify({ itemId: currentPromptItem.id })
-      });
-      setCompletedReward(res.message);
-      refreshUser();
-    } catch (err: any) {
-      alert(err.message || 'تعذر تسجيل إتمام التحدي');
-    } finally {
-      setCompleting(false);
-    }
-  };
-
   return (
-    <div className="space-y-6 animate-in fade-in">
-      <div className="p-4 sm:p-6 rounded-2xl sm:rounded-3xl bg-gradient-to-r from-neutral-900 via-neutral-900/90 to-indigo-950/40 border border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Dices className="w-5 h-5 sm:w-6 sm:h-6 text-indigo-400 shrink-0" />
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-cairo font-black text-white">الألعاب والمسابقات الاجتماعية</h1>
+    <div className="space-y-6 animate-in fade-in" dir="rtl">
+      {/* Header Banner */}
+      <div className="p-6 rounded-3xl bg-gradient-to-r from-amber-950/40 via-neutral-900 to-emerald-950/30 border border-neutral-800 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+              <Dices className="w-5 h-5" />
+            </div>
+            <h1 className="text-xl sm:text-2xl font-cairo font-black text-white">
+              ساحة الألعاب والتحديات بالكوينز
+            </h1>
           </div>
           <p className="text-xs sm:text-sm text-neutral-400 font-tajawal max-w-xl">
-            استمتع بالألعاب التفاعلية الخفيفة واربح كوينز إضافية واكتسب أصدقاء جدد.
+            تنافس وتحدَّ ذكاءك بالكوينز، واكسب جوائز ومضاعفات لأرصدتك ونقاط خبرتك.
           </p>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex items-center gap-1 p-1 bg-neutral-900 border border-neutral-800 rounded-xl sm:rounded-2xl overflow-x-auto no-scrollbar max-w-full">
-          <button
-            onClick={() => setActiveGame('wheel')}
-            className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer shrink-0 active:scale-95 ${
-              activeGame === 'wheel' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-400'
-            }`}
-          >
-            عجلة الحظ 🎡
-          </button>
-          <button
-            onClick={() => setActiveGame('quiz')}
-            className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer shrink-0 active:scale-95 ${
-              activeGame === 'quiz' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-400'
-            }`}
-          >
-            تحدي الأمثال 🧠
-          </button>
-          <button
-            onClick={() => setActiveGame('truth')}
-            className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer shrink-0 active:scale-95 ${
-              activeGame === 'truth' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-400'
-            }`}
-          >
-            صراحة أم جرأة 💬
-          </button>
+        {/* Current Balance */}
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-neutral-900/90 border border-neutral-800 shrink-0">
+          <Coins className="w-5 h-5 text-amber-400" />
+          <div className="text-right">
+            <div className="text-[10px] text-neutral-400 font-tajawal">رصيدك الحالي</div>
+            <div className="text-sm font-black font-cairo text-amber-300">{user?.coins || 0} كوينز</div>
+          </div>
         </div>
       </div>
 
-      {/* 1. LUCKY WHEEL */}
-      {activeGame === 'wheel' && (
-        <div className="max-w-xl mx-auto p-4 sm:p-8 rounded-2xl sm:rounded-3xl bg-[#0e1017] border border-neutral-800 text-center space-y-6 shadow-2xl">
-          <div className="space-y-2">
-            <h2 className="font-cairo font-black text-2xl text-white">عجلة الحظ اليومية</h2>
-            <p className="text-xs text-neutral-400 font-tajawal">
-              يحق لكل عضو تدوير العجلة مرة واحدة كل 24 ساعة للفوز بكوينز ونقاط خبرة فورية!
-            </p>
-          </div>
-
-          <div className="relative w-48 h-48 sm:w-56 sm:h-56 mx-auto flex items-center justify-center">
-            <div className={`w-full h-full rounded-full border-8 border-amber-500/50 bg-gradient-to-tr from-amber-600 via-indigo-600 to-emerald-600 flex items-center justify-center shadow-2xl ${
-              spinning ? 'animate-spin' : ''
-            }`}>
-              <div className="w-24 h-24 rounded-full bg-[#0e1017] border-4 border-white/30 flex items-center justify-center font-cairo font-black text-xl text-amber-300">
-                {spinning ? '🌀' : '🎡'}
-              </div>
-            </div>
-          </div>
-
-          {wheelResult && (
-            <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-700/60 text-emerald-300 font-cairo font-bold text-sm">
-              {wheelResult}
-            </div>
-          )}
-
-          <button
-            disabled={spinning}
-            onClick={handleSpinWheel}
-            className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-600 to-indigo-600 hover:from-amber-500 hover:to-indigo-500 text-white font-bold text-sm shadow-xl shadow-amber-600/20 cursor-pointer disabled:opacity-50 transition-all"
-          >
-            {spinning ? 'جاري تدوير العجلة...' : 'تدوير العجلة الآن ✨'}
+      {/* Message Toast */}
+      {gameMessage && (
+        <div
+          className={`p-3.5 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-between transition-all ${
+            gameMessage.type === 'success'
+              ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60'
+              : gameMessage.type === 'error'
+              ? 'bg-rose-950/80 text-rose-300 border border-rose-700/60'
+              : 'bg-neutral-900 text-neutral-200 border border-neutral-800'
+          }`}
+        >
+          <span>{gameMessage.text}</span>
+          <button onClick={() => setGameMessage(null)} className="text-xs opacity-70 hover:opacity-100 cursor-pointer">
+            ✕
           </button>
         </div>
       )}
 
-      {/* 2. PROVERBS QUIZ */}
-      {activeGame === 'quiz' && (
-        <div className="max-w-xl mx-auto p-8 rounded-3xl bg-[#0e1017] border border-neutral-800 space-y-6 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
-            <h2 className="font-cairo font-black text-lg text-white flex items-center gap-2">
-              <HelpCircle className="w-5 h-5 text-emerald-400" />
-              تحدي الأمثال الشعبية العربية
+      {/* Navigation Tabs */}
+      <div className="flex items-center gap-2 border-b border-neutral-800 pb-2 overflow-x-auto">
+        <button
+          onClick={() => setActiveGame('tictactoe')}
+          className={`px-4 py-2.5 rounded-2xl font-cairo font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer ${
+            activeGame === 'tictactoe'
+              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+              : 'bg-neutral-900/70 text-neutral-400 hover:text-white border border-neutral-800'
+          }`}
+        >
+          <span>❌⭕ لعبة X & O (تحدي الكوينز)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveGame('wheel')}
+          className={`px-4 py-2.5 rounded-2xl font-cairo font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer ${
+            activeGame === 'wheel'
+              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+              : 'bg-neutral-900/70 text-neutral-400 hover:text-white border border-neutral-800'
+          }`}
+        >
+          <RotateCw className="w-4 h-4 text-amber-400" />
+          <span>🎡 عجلة الحظ الملكية</span>
+        </button>
+
+        <button
+          onClick={() => setActiveGame('quiz')}
+          className={`px-4 py-2.5 rounded-2xl font-cairo font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer ${
+            activeGame === 'quiz'
+              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+              : 'bg-neutral-900/70 text-neutral-400 hover:text-white border border-neutral-800'
+          }`}
+        >
+          <HelpCircle className="w-4 h-4 text-teal-400" />
+          <span>🧠 مسابقة الأمثال والثقافة</span>
+        </button>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 1. X & O TIC TAC TOE GAME                                                 */}
+      {/* ========================================================================= */}
+      {activeGame === 'tictactoe' && (
+        <div className="max-w-xl mx-auto p-5 sm:p-7 rounded-3xl bg-[#0b0e16] border border-neutral-800 shadow-2xl space-y-6">
+          <div className="text-center space-y-2">
+            <h2 className="text-xl sm:text-2xl font-cairo font-black text-white flex items-center justify-center gap-2">
+              <span className="text-emerald-400">X</span>
+              <span className="text-neutral-500">ضد</span>
+              <span className="text-rose-400">O</span>
             </h2>
+            <p className="text-xs sm:text-sm text-neutral-400 font-tajawal">
+              العب ضد الذكاء الاصطناعي الذكي، وضاعف رهان كوينز عند الفوز!
+            </p>
+          </div>
+
+          {/* Stake Selector */}
+          {!gameStarted && (
+            <div className="space-y-3 p-4 rounded-2xl bg-neutral-900/60 border border-neutral-800">
+              <div className="text-xs font-bold text-neutral-300 font-tajawal text-center">
+                اختر قيمة رهان الكوينز للجولة:
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {[10, 25, 50, 100].map(stake => (
+                  <button
+                    key={stake}
+                    onClick={() => setTtoStake(stake)}
+                    className={`py-2 rounded-xl font-cairo font-bold text-xs transition-all cursor-pointer border ${
+                      ttoStake === stake
+                        ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-md shadow-amber-500/20'
+                        : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:bg-neutral-850'
+                    }`}
+                  >
+                    {stake} كوينز
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={handleStartTtoGame}
+                disabled={ttoProcessing}
+                className="w-full mt-2 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-cairo font-bold text-sm shadow-lg shadow-emerald-600/30 transition-all cursor-pointer active:scale-95"
+              >
+                دفع {ttoStake} كوينز وبدء المباراة
+              </button>
+            </div>
+          )}
+
+          {/* Active Game State */}
+          {gameStarted && (
+            <div className="space-y-5">
+              <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-neutral-900/80 border border-neutral-800 text-xs font-bold">
+                <span className="text-amber-400">الجائزة عند الفوز: {ttoStake * 2} كوينز 🏆</span>
+                <span className={isXNext ? 'text-emerald-400' : 'text-rose-400'}>
+                  {gameOver
+                    ? winner === 'draw'
+                      ? 'انتهت بالتعادل!'
+                      : `الفائز: ${winner}!`
+                    : isXNext
+                    ? 'دورك الآن (X) 👈'
+                    : 'دور الذكاء الاصطناعي (O) ⏳'}
+                </span>
+              </div>
+
+              {/* 3x3 Board */}
+              <div className="grid grid-cols-3 gap-2.5 max-w-[320px] mx-auto">
+                {board.map((cell, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleCellClick(idx)}
+                    disabled={Boolean(cell) || gameOver || (!isXNext && playingWithAi)}
+                    className={`h-24 sm:h-26 rounded-2xl flex items-center justify-center text-4xl sm:text-5xl font-black font-cairo border-2 transition-all cursor-pointer ${
+                      cell === 'X'
+                        ? 'bg-emerald-950/40 border-emerald-500/70 text-emerald-400 shadow-inner'
+                        : cell === 'O'
+                        ? 'bg-rose-950/40 border-rose-500/70 text-rose-400 shadow-inner'
+                        : 'bg-[#0f131d] border-neutral-800/80 hover:border-neutral-700 hover:bg-[#131824]'
+                    }`}
+                  >
+                    {cell === 'X' ? <span className="animate-in zoom-in-75">✕</span> : cell === 'O' ? <span className="animate-in zoom-in-75">◯</span> : null}
+                  </button>
+                ))}
+              </div>
+
+              {gameOver && (
+                <div className="pt-2 text-center">
+                  <button
+                    onClick={() => setGameStarted(false)}
+                    className="px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-cairo font-bold text-xs shadow-md transition-all cursor-pointer active:scale-95"
+                  >
+                    🔄 لعب جولة جديدة
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 2. LUCKY WHEEL                                                            */}
+      {/* ========================================================================= */}
+      {activeGame === 'wheel' && (
+        <div className="max-w-xl mx-auto p-6 rounded-3xl bg-[#0b0e16] border border-neutral-800 shadow-2xl text-center space-y-6">
+          <div className="space-y-1.5">
+            <h2 className="text-xl font-cairo font-black text-white">عجلة الحظ اليومية</h2>
+            <p className="text-xs text-neutral-400 font-tajawal">
+              تكلفة الدورة: {WHEEL_COST} كوينز. يمكنك الفوز بشارات وجوائز كوينز كبرى!
+            </p>
+          </div>
+
+          <div className="relative w-56 h-56 mx-auto flex items-center justify-center">
+            <div
+              className={`w-52 h-52 rounded-full border-4 border-amber-400/80 bg-gradient-to-tr from-amber-600 via-yellow-500 to-amber-700 flex items-center justify-center shadow-2xl transition-transform duration-1000 ${
+                spinning ? 'animate-spin' : ''
+              }`}
+            >
+              <div className="w-40 h-40 rounded-full bg-[#080a10] flex items-center justify-center text-amber-300 font-cairo font-bold text-sm border-2 border-amber-500/40">
+                {wheelResult || '🎡 فضفضه'}
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={handleSpinWheel}
+            disabled={spinning}
+            className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 disabled:opacity-40 text-neutral-950 font-cairo font-black text-sm shadow-xl shadow-amber-500/30 cursor-pointer active:scale-95 transition-all"
+          >
+            {spinning ? 'جاري التدوير... 🎡' : `تدوير العجلة الآن (${WHEEL_COST} كوينز)`}
+          </button>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 3. PROVERBS & CULTURAL QUIZ                                               */}
+      {/* ========================================================================= */}
+      {activeGame === 'quiz' && (
+        <div className="max-w-xl mx-auto p-6 rounded-3xl bg-[#0b0e16] border border-neutral-800 shadow-2xl space-y-5">
+          <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+            <div>
+              <h2 className="text-lg font-cairo font-black text-white">مسابقة الأمثال العربية والثقافة</h2>
+              <p className="text-xs text-neutral-400 font-tajawal">
+                تكلفة السؤال: {QUIZ_COST} كوينز · الجائزة: {QUIZ_REWARD} كوينز
+              </p>
+            </div>
             <button
               onClick={fetchQuiz}
-              className="text-xs text-neutral-400 hover:text-white flex items-center gap-1 cursor-pointer"
+              className="p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 cursor-pointer"
+              title="سؤال جديد"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>سؤال آخر</span>
+              <RefreshCw className="w-4 h-4" />
             </button>
           </div>
 
           {quiz ? (
             <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 text-center font-cairo font-bold text-base sm:text-lg text-white">
+              <div className="p-4 rounded-2xl bg-neutral-900/60 border border-neutral-800 font-cairo font-bold text-sm text-white leading-relaxed">
                 {quiz.question}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                {quiz.options.map((opt: string, idx: number) => {
+              <div className="space-y-2">
+                {quiz.options?.map((option: string, idx: number) => {
+                  const isSelected = selectedOption === idx;
+                  const isCorrect = quizResult && idx === quiz.correctIndex;
+                  const isWrong = quizResult && isSelected && !quizResult.correct;
+
                   return (
                     <button
                       key={idx}
+                      onClick={() => handleAnswerQuiz(idx)}
                       disabled={quizAnswered}
-                      onClick={() => handleQuizAnswer(idx)}
-                      className={`p-4 rounded-2xl border text-sm font-bold transition-all cursor-pointer ${
-                        selectedOption === idx
-                          ? quizResult?.correct
-                            ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200'
-                            : 'bg-rose-950/80 border-rose-500 text-rose-200'
-                          : 'bg-neutral-900/60 hover:bg-neutral-800 border-neutral-800 text-neutral-200'
+                      className={`w-full text-right p-3.5 rounded-2xl border transition-all cursor-pointer font-tajawal text-xs sm:text-sm font-semibold flex items-center justify-between ${
+                        isCorrect
+                          ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300'
+                          : isWrong
+                          ? 'bg-rose-950/80 border-rose-500 text-rose-300'
+                          : isSelected
+                          ? 'bg-neutral-800 border-neutral-700 text-white'
+                          : 'bg-neutral-950 border-neutral-800/80 text-neutral-300 hover:bg-neutral-900'
                       }`}
                     >
-                      {opt}
+                      <span>{option}</span>
+                      {isCorrect && <Check className="w-4 h-4 text-emerald-400" />}
+                      {isWrong && <XIcon className="w-4 h-4 text-rose-400" />}
                     </button>
                   );
                 })}
               </div>
 
               {quizResult && (
-                <div className={`p-4 rounded-2xl border text-center font-cairo font-bold text-sm ${
-                  quizResult.correct
-                    ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
-                    : 'bg-rose-950/60 border-rose-700 text-rose-300'
-                }`}>
-                  {quizResult.message}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="p-8 text-center text-xs text-neutral-500">جاري تحميل السؤال...</div>
-          )}
-        </div>
-      )}
-
-      {/* 3. TRUTH OR DARE */}
-      {activeGame === 'truth' && (
-        <div className="max-w-2xl mx-auto p-6 sm:p-8 rounded-3xl bg-[#0e1017] border border-neutral-800 space-y-6 shadow-2xl text-center relative overflow-hidden">
-          {/* Floating Reactions Overlay */}
-          <div className="absolute top-4 left-4 z-20 pointer-events-none flex flex-col gap-2">
-            {recentReactions.map(r => (
-              <div
-                key={r.id}
-                className="px-3 py-1.5 rounded-full bg-neutral-900/90 border border-neutral-700/60 text-xs font-bold text-white flex items-center gap-1.5 animate-bounce shadow-xl"
-              >
-                <span className="text-base">{r.emoji}</span>
-                <span className="text-[10px] text-neutral-300 font-tajawal">{r.username}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="space-y-2">
-            <h2 className="font-cairo font-black text-2xl text-white">لعبة صراحة أم جرأة</h2>
-            <p className="text-xs text-neutral-400 font-tajawal">
-              أسئلة وتحديات راقية مصممة لبناء حوار ممتع وكسر الجليد مع الأصدقاء.
-            </p>
-          </div>
-
-          {/* Mode Switcher */}
-          <div className="flex items-center justify-center p-1 rounded-2xl bg-neutral-900/90 border border-neutral-800 max-w-xs mx-auto">
-            <button
-              onClick={() => setTodMode('solo')}
-              className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                todMode === 'solo' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
-              }`}
-            >
-              فردي 👤
-            </button>
-            <button
-              onClick={() => setTodMode('multiplayer')}
-              className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                todMode === 'multiplayer' ? 'bg-gradient-to-r from-teal-600 to-indigo-600 text-white shadow-md' : 'text-neutral-400 hover:text-white'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" />
-              <span>تحدي جماعي مباشر 👥</span>
-            </button>
-          </div>
-
-          {todMode === 'solo' ? (
-            /* SOLO MODE */
-            <div className="space-y-6">
-              <div className="p-8 rounded-3xl bg-neutral-900/60 border border-neutral-800 min-h-[140px] flex flex-col items-center justify-center gap-3">
-                {promptLoading ? (
-                  <div className="flex items-center gap-2 text-neutral-400 text-sm font-tajawal animate-pulse">
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>جاري اختيار التحدي...</span>
-                  </div>
-                ) : (
-                  <>
-                    {currentPromptItem && (
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
-                          promptType === 'dare'
-                            ? 'bg-rose-950/60 text-rose-300 border-rose-800/60'
-                            : 'bg-indigo-950/60 text-indigo-300 border-indigo-800/60'
-                        }`}>
-                          {promptType === 'dare' ? 'تحدي جرأة 🔥' : 'سؤال صراحة 💎'}
-                        </span>
-                        {currentPromptItem.category && (
-                          <span className="text-[10px] text-neutral-400 font-tajawal">
-                            الفئة: {currentPromptItem.category}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    <p className="font-cairo font-bold text-lg text-neutral-100 leading-relaxed">
-                      "{currentPrompt}"
-                    </p>
-                  </>
-                )}
-              </div>
-
-              {/* Reward claiming button */}
-              {currentPromptItem && !completedReward && (
-                <button
-                  onClick={completeChallenge}
-                  disabled={completing}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 to-emerald-600 hover:from-amber-500 hover:to-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/20 cursor-pointer transition-all flex items-center justify-center gap-2"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>{completing ? 'جاري التحقق...' : 'أتممت الإجابة / نفّذت التحدي (+10 كوينز 🪙)'}</span>
-                </button>
-              )}
-
-              {completedReward && (
-                <div className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-700/60 text-emerald-300 font-cairo font-bold text-sm animate-in fade-in flex items-center justify-center gap-2">
-                  <Sparkles className="w-4 h-4 text-emerald-400" />
-                  <span>{completedReward}</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  onClick={pickTruth}
-                  disabled={promptLoading}
-                  className="py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-indigo-600/20 cursor-pointer transition-all"
-                >
-                  اختر صراحة 💎
-                </button>
-                <button
-                  onClick={pickDare}
-                  disabled={promptLoading}
-                  className="py-4 rounded-2xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-rose-600/20 cursor-pointer transition-all"
-                >
-                  اختر جرأة 🔥
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* REAL-TIME MULTIPLAYER MODE */
-            <div className="space-y-6">
-              {/* Connected Players Bar */}
-              <div className="p-4 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-2">
-                <div className="flex items-center justify-between text-xs text-neutral-400 border-b border-neutral-800 pb-2">
-                  <div className="flex items-center gap-1.5 font-cairo font-bold text-white">
-                    <Users className="w-3.5 h-3.5 text-teal-400" />
-                    <span>اللاعبون المتصلون بالجلسة ({todMultiState.players?.length || 1})</span>
-                  </div>
-                  <span className="text-[11px] text-teal-400 font-tajawal">مباشر ⚡</span>
-                </div>
-
-                <div className="flex items-center justify-center gap-3 flex-wrap pt-1">
-                  {(todMultiState.players && todMultiState.players.length > 0 ? todMultiState.players : [
-                    { userId: user?.id || 'me', username: user?.username || 'أنت', gender: user?.gender, score: 0 }
-                  ]).map((p: any) => {
-                    const isTarget = todMultiState.targetUserId === p.userId;
-                    const isTurn = todMultiState.turnUserId === p.userId;
-
-                    return (
-                      <div
-                        key={p.userId}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${
-                          isTarget
-                            ? 'bg-rose-950/80 border-rose-500 ring-2 ring-rose-500/50 scale-105'
-                            : isTurn
-                            ? 'bg-teal-950/80 border-teal-500 ring-2 ring-teal-500/40'
-                            : 'bg-neutral-900 border-neutral-800'
-                        }`}
-                      >
-                        <div
-                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                            p.gender === 'female' ? 'bg-rose-900 text-rose-200' : 'bg-teal-900 text-teal-200'
-                          }`}
-                        >
-                          {p.username.slice(0, 1).toUpperCase()}
-                        </div>
-                        <span className="text-xs font-bold text-white max-w-[90px] truncate font-tajawal">
-                          {p.username}
-                        </span>
-                        {p.score > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-950 text-amber-300 font-bold border border-amber-800/60">
-                            {p.score}★
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Central Bottle Arena */}
-              <div className="relative w-48 h-48 sm:w-56 sm:h-56 mx-auto flex items-center justify-center">
-                <div className="absolute inset-0 rounded-full border-4 border-dashed border-neutral-800/80 animate-[spin_60s_linear_infinite]" />
-                <div
-                  className="text-6xl sm:text-7xl transition-transform cursor-pointer select-none filter drop-shadow-2xl"
-                  style={{
-                    transform: `rotate(${bottleAngle}deg)`,
-                    transition: isBottleSpinning ? 'transform 2.5s cubic-bezier(0.2, 0.8, 0.2, 1)' : 'none'
-                  }}
-                  onClick={handleMultiSpin}
-                >
-                  🍾
-                </div>
-              </div>
-
-              {/* Question or Challenge Display Card */}
-              {todMultiState.currentQuestion ? (
-                <div className="p-6 rounded-3xl bg-neutral-900/80 border border-neutral-700 space-y-3 animate-in zoom-in-95">
-                  <div className="flex items-center justify-center gap-2">
-                    <span className={`text-[10px] font-bold px-3 py-0.5 rounded-full border ${
-                      todMultiState.currentType === 'dare'
-                        ? 'bg-rose-950/80 text-rose-300 border-rose-800'
-                        : 'bg-indigo-950/80 text-indigo-300 border-indigo-800'
-                    }`}>
-                      {todMultiState.currentType === 'dare' ? 'تحدي جرأة 🔥' : 'سؤال صراحة 💎'}
-                    </span>
-                  </div>
-                  <p className="font-cairo font-bold text-base sm:text-lg text-white leading-relaxed">
-                    "{todMultiState.currentQuestion}"
-                  </p>
-
-                  {/* Display Target Player's Answer if completed */}
-                  {todMultiState.currentAnswer && (
-                    <div className="p-4 rounded-2xl bg-teal-950/40 border border-teal-800/50 text-teal-200 text-sm font-tajawal text-right space-y-1">
-                      <div className="text-[10px] text-teal-400 font-bold">إجابة اللاعب:</div>
-                      <p className="whitespace-pre-wrap">{todMultiState.currentAnswer}</p>
-                    </div>
-                  )}
-
-                  {/* Answer Input if target is CURRENT USER */}
-                  {todMultiState.state === 'answering' && todMultiState.targetUserId === user?.id && (
-                    <form onSubmit={handleMultiAnswerSubmit} className="flex gap-2 pt-2">
-                      <input
-                        type="text"
-                        value={multiAnswerInput}
-                        onChange={(e) => setMultiAnswerInput(e.target.value)}
-                        placeholder="اكتب إجابتك أو أكّد تنفيذ التحدي..."
-                        className="flex-1 px-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs placeholder:text-neutral-500 focus:outline-none focus:border-teal-500"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!multiAnswerInput.trim()}
-                        className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>إرسال</span>
-                      </button>
-                    </form>
-                  )}
-                </div>
-              ) : null}
-
-              {/* Action Buttons depending on Game State */}
-              <div className="space-y-3">
-                {/* 1. Choosing Truth vs Dare (Target's Turn) */}
-                {todMultiState.state === 'choosing' && todMultiState.targetUserId === user?.id ? (
-                  <div className="grid grid-cols-2 gap-4 animate-in fade-in">
-                    <button
-                      onClick={() => handleMultiChoice('truth')}
-                      className="py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/20 cursor-pointer"
-                    >
-                      اختر صراحة 💎
-                    </button>
-                    <button
-                      onClick={() => handleMultiChoice('dare')}
-                      className="py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-lg shadow-rose-600/20 cursor-pointer"
-                    >
-                      اختر جرأة 🔥
-                    </button>
-                  </div>
-                ) : (
-                  /* 2. Spin the Bottle Button */
+                <div className="pt-2 text-center">
                   <button
-                    onClick={handleMultiSpin}
-                    disabled={isBottleSpinning}
-                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-teal-600 to-indigo-600 hover:from-teal-500 hover:to-indigo-500 text-white font-bold text-sm shadow-xl shadow-teal-600/20 cursor-pointer disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                    onClick={fetchQuiz}
+                    className="px-6 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-cairo font-bold text-xs cursor-pointer shadow-md"
                   >
-                    <RotateCw className={`w-4 h-4 ${isBottleSpinning ? 'animate-spin' : ''}`} />
-                    <span>{isBottleSpinning ? 'الزجاجة تدور الآن...' : 'تدوير الزجاجة واختيار لاعب 🍾'}</span>
+                    السؤال التالي ←
                   </button>
-                )}
-
-                {/* Reaction Bar */}
-                <div className="flex items-center justify-center gap-3 pt-2">
-                  <span className="text-[11px] text-neutral-500 font-tajawal">تفاعل مع الجلسة:</span>
-                  {['🔥', '👏', '😂', '👑', '❤️'].map((emoji) => (
-                    <button
-                      key={emoji}
-                      onClick={() => sendReaction(emoji)}
-                      className="w-9 h-9 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 flex items-center justify-center text-base hover:scale-110 active:scale-95 transition-all cursor-pointer"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
                 </div>
-              </div>
+              )}
             </div>
+          ) : (
+            <div className="p-8 text-center text-xs text-neutral-400">جاري تحميل السؤال...</div>
           )}
         </div>
       )}

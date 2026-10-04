@@ -129,12 +129,21 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     if (activeConvId === convId) return;
     setActiveConvId(convId);
     setActiveRecipient(recipient);
+    if (recipient?.id) {
+      (window as any).__fadfada_active_chat_user_id = recipient.id;
+    }
     // Mark as read in state
     setConversations(prev =>
       prev.map(c => (c.id === convId ? { ...c, unreadCount: 0 } : c))
     );
     loadMessages(convId);
   };
+
+  useEffect(() => {
+    return () => {
+      (window as any).__fadfada_active_chat_user_id = null;
+    };
+  }, []);
 
   const loadMessages = async (convId: string) => {
     try {
@@ -711,7 +720,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             <div className="p-8 text-center space-y-2">
               <p className="text-sm font-cairo font-bold text-neutral-400">لا توجد محادثات حتى الآن</p>
               <p className="text-xs text-neutral-500 font-tajawal">
-                تصفح "المتصلون الآن" وابدأ أول محادثة راقية!
+                تصفح "المتواجدون حالياً" وابدأ أول محادثة راقية!
               </p>
             </div>
           ) : (
@@ -1179,7 +1188,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           </div>
           <h3 className="font-cairo font-bold text-lg text-white">اختر محادثة للبدء</h3>
           <p className="text-xs text-neutral-400 font-tajawal max-w-sm">
-            اختر أحد الأصدقاء من القائمة الجانبية أو توجه إلى "المتصلون الآن" للتعرف على أشخاص جدد.
+            اختر أحد الأصدقاء من القائمة الجانبية أو توجه إلى "المتواجدون حالياً" للتعرف على أشخاص جدد.
           </p>
         </div>
       )}

@@ -99,6 +99,16 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
     }, 50);
   };
 
+  // Track active chat user globally to suppress duplicate notifications
+  useEffect(() => {
+    (window as any).__fadfada_active_chat_user_id = targetUser.id;
+    return () => {
+      if ((window as any).__fadfada_active_chat_user_id === targetUser.id) {
+        (window as any).__fadfada_active_chat_user_id = null;
+      }
+    };
+  }, [targetUser.id]);
+
   // Initialize or fetch conversation
   useEffect(() => {
     isMountedRef.current = true;
@@ -163,6 +173,11 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
           return [...prev, { ...data.message, status: 'sent' }];
         });
         scrollToBottom();
+
+        // If message is from target user, mark as read immediately
+        if (data.message.senderId === targetUser.id) {
+          apiRequest(`/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => {});
+        }
       }
     });
 
@@ -549,10 +564,10 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20'
                 : 'bg-neutral-800/80 hover:bg-neutral-700 text-neutral-300 hover:text-white'
             }`}
-            title="العودة لقائمة المتصلين"
+            title="العودة لقائمة المتواجدين حالياً"
           >
-            <ArrowRight className="w-4 h-4" />
-            <span className="hidden min-[360px]:inline">رجوع</span>
+            <ArrowRight className="w-4 h-4 shrink-0" />
+            <span className="inline text-xs font-bold">رجوع</span>
           </button>
 
           {/* Recipient Avatar */}

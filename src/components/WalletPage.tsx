@@ -51,10 +51,10 @@ export const WalletPage: React.FC = () => {
   };
 
   const defaultVipTiers = [
-    { id: 'bronze', name: 'VIP البرونزي', priceCoins: 200, days: 30, color: 'from-amber-800 to-amber-950', border: 'border-amber-700', icon: '🥉', perks: ['شارة VIP برونزية مميزة في الملف والدردشة', 'أولوية ظهور في قائمة المتصلين الآن', 'مضاعفة نقاط الخبرة (1.2x)'] },
-    { id: 'silver', name: 'VIP الفضي', priceCoins: 500, days: 30, color: 'from-slate-700 to-slate-900', border: 'border-slate-500', icon: '🥈', perks: ['شارة فضية براقة بجانب اسمك', 'ظهور عالي الأولوية في المتصلين والمجالس', 'مضاعفة نقاط الخبرة (1.5x)', 'فقاعة رسائل فضية خاصة'] },
-    { id: 'gold', name: 'VIP الذهبي', priceCoins: 1000, days: 30, color: 'from-yellow-600 to-amber-900', border: 'border-yellow-500', icon: '🥇', perks: ['تاج ذهبي متوهج بجانب اسمك', 'صدارة قائمة المتصلين الآن', 'مضاعفة نقاط الخبرة (2x)', 'إنشاء مجالس وغرف دون قيود'] },
-    { id: 'royal', name: 'VIP الملكي', priceCoins: 2500, days: 30, color: 'from-purple-900 to-indigo-950', border: 'border-purple-500', icon: '👑', perks: ['شارة الألماس الملكي ذات البريق المتحرك', 'تثبيت استثنائي في مقدمة المتصلين', 'مضاعفة نقاط الخبرة (3x)', 'دخول كافة الغرف المغلقة'] }
+    { id: 'bronze', name: 'VIP البرونزي', priceCoins: 200, days: 30, color: 'from-amber-800 to-amber-950', border: 'border-amber-700', icon: '🥉', perks: ['شارة VIP برونزية مميزة في الملف والدردشة', 'أولوية ظهور في قائمة المتواجدين حالياً', 'مضاعفة نقاط الخبرة (1.2x)'] },
+    { id: 'silver', name: 'VIP الفضي', priceCoins: 500, days: 30, color: 'from-slate-700 to-slate-900', border: 'border-slate-500', icon: '🥈', perks: ['شارة فضية براقة بجانب اسمك', 'ظهور عالي الأولوية في المتواجدين والمجالس', 'مضاعفة نقاط الخبرة (1.5x)', 'فقاعة رسائل فضية خاصة'] },
+    { id: 'gold', name: 'VIP الذهبي', priceCoins: 1000, days: 30, color: 'from-yellow-600 to-amber-900', border: 'border-yellow-500', icon: '🥇', perks: ['تاج ذهبي متوهج بجانب اسمك', 'صدارة قائمة المتواجدين حالياً', 'مضاعفة نقاط الخبرة (2x)', 'إنشاء مجالس وغرف دون قيود'] },
+    { id: 'royal', name: 'VIP الملكي', priceCoins: 2500, days: 30, color: 'from-purple-900 to-indigo-950', border: 'border-purple-500', icon: '👑', perks: ['شارة الألماس الملكي ذات البريق المتحرك', 'تثبيت استثنائي في مقدمة المتواجدين', 'مضاعفة نقاط الخبرة (3x)', 'دخول كافة الغرف المغلقة'] }
   ];
 
   const activePlans = vipPlans.length > 0 ? vipPlans : defaultVipTiers;
@@ -104,7 +104,7 @@ export const WalletPage: React.FC = () => {
             باقات وعضويات VIP المميزة
           </h2>
           <p className="text-xs text-neutral-400 font-tajawal">
-            احصل على إبراز ملفك الشخصي، شارة ملكية خاصة، وظهور متميز في دليل المتصلين الآن.
+            احصل على إبراز ملفك الشخصي، شارة ملكية خاصة، وظهور متميز في دليل المتواجدين حالياً.
           </p>
         </div>
 

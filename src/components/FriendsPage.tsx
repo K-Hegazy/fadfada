@@ -253,7 +253,7 @@ export const FriendsPage: React.FC<FriendsPageProps> = ({
                 الأصدقاء وطلبات الصداقة
               </h1>
               <p className="text-xs sm:text-sm text-neutral-400 font-tajawal">
-                إدارة شبكة أصدقائك في فضفضه، متابعة المتصلين منهم، والترحيب بطلبات الصداقة الجديدة.
+                إدارة شبكة أصدقائك في فضفضه، متابعة المتواجدين منهم، والترحيب بطلبات الصداقة الجديدة.
               </p>
             </div>
           </div>
@@ -402,7 +402,7 @@ export const FriendsPage: React.FC<FriendsPageProps> = ({
                 }`}
               >
                 <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>المتصلون الآن ({onlineFriendsCount})</span>
+                <span>المتواجدون حالياً ({onlineFriendsCount})</span>
               </button>
 
               <button
@@ -448,7 +448,7 @@ export const FriendsPage: React.FC<FriendsPageProps> = ({
                 </h3>
                 <p className="text-xs sm:text-sm text-neutral-400 font-tajawal max-w-md mx-auto">
                   {friends.length === 0
-                    ? 'ابحث عن أصدقاء جدد من قائمة المتصلين الآن أو أرسل طلبات صداقة لبدء محادثات مميزة.'
+                    ? 'ابحث عن أصدقاء جدد من قائمة المتواجدين حالياً أو أرسل طلبات صداقة لبدء محادثات مميزة.'
                     : 'جرّب كتابة اسم آخر أو تصفير معايير التصفية.'}
                 </p>
               </div>
@@ -466,7 +466,7 @@ export const FriendsPage: React.FC<FriendsPageProps> = ({
                       onClick={() => onNavigate('online')}
                       className="px-5 py-2.5 rounded-2xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 text-xs font-bold transition-all cursor-pointer"
                     >
-                      تصفح المتصلين الآن
+                      تصفح المتواجدين حالياً
                     </button>
                   )}
                 </div>
@@ -744,7 +744,7 @@ export const FriendsPage: React.FC<FriendsPageProps> = ({
                 لا توجد طلبات صداقة مرسلة حالياً
               </h3>
               <p className="text-xs text-neutral-400 font-tajawal max-w-sm mx-auto">
-                يمكنك تصفح المتصلين الآن أو استخدام خيار البحث لإرسال طلبات صداقة جديدة.
+                يمكنك تصفح المتواجدين حالياً أو استخدام خيار البحث لإرسال طلبات صداقة جديدة.
               </p>
             </div>
           ) : (

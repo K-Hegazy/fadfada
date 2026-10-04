@@ -19,7 +19,7 @@ export const FadfadaAssistantModal: React.FC<FadfadaAssistantModalProps> = ({ on
     {
       id: 'welcome_msg',
       sender: 'assistant',
-      text: `مرحباً بك يا ${user?.username || 'صديقنا العزيز'}! أنا "مساعد فضفضه" الذكي. أنا هنا لإرشادك والإجابة عن أي استفسار حول كيفية استخدام المنصة (المتصلون الآن، المجالس، المحادثات الخاصة، الصور ذاتية التدمير، المهام، ونظام VIP). كيف يمكنني مساعدتك؟`
+      text: `مرحباً بك يا ${user?.username || 'صديقنا العزيز'}! أنا "مساعد فضفضه" الذكي. أنا هنا لإرشادك والإجابة عن أي استفسار حول كيفية استخدام المنصة (المتواجدون حالياً، المجالس، المحادثات الخاصة، الصور ذاتية التدمير، المهام، ونظام VIP). كيف يمكنني مساعدتك؟`
     }
   ]);
   const [input, setInput] = useState<string>('');
@@ -27,7 +27,7 @@ export const FadfadaAssistantModal: React.FC<FadfadaAssistantModalProps> = ({ on
   const endRef = useRef<HTMLDivElement>(null);
 
   const QUICK_QUESTIONS = [
-    'كيف يتم ترتيب المتصلين الآن؟',
+    'كيف يتم ترتيب المتواجدين حالياً؟',
     'ما هي ميزة الصور ذاتية التدمير؟',
     'كيف أكسب كوينز في فضفضه؟',
     'ما هي قيود حساب الزائر؟',

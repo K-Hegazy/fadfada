@@ -427,7 +427,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
               <div className="w-10 h-10 rounded-xl bg-teal-950/60 border border-teal-800/40 flex items-center justify-center text-teal-400">
                 <Compass className="w-5 h-5" />
               </div>
-              <h3 className="font-cairo font-bold text-lg text-white">المتصلون حسب بلدك</h3>
+              <h3 className="font-cairo font-bold text-lg text-white">المتواجدون حسب بلدك</h3>
               <p className="text-sm text-neutral-400 leading-relaxed font-tajawal">
                 دليل حي يتيح لك التواصل الفوري مع رواد المنصة من دولتك أولاً، وبألوان راقية تميز الحضور.
               </p>
@@ -594,7 +594,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                   disabled={loading}
                   className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  {loading ? 'جاري التحقق...' : 'دخول إلى المتصلين الآن'}
+                  {loading ? 'جاري التحقق...' : 'دخول إلى المتواجدين حالياً'}
                 </button>
 
                 <div className="text-center pt-2">
@@ -966,7 +966,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                   </div>
 
                   <p className="text-[11px] text-neutral-400 font-tajawal leading-relaxed">
-                    تم تحديد دولتك تلقائياً بناءً على اتصال شبكتك لترتيب أعضاء ({regCountry}) أولاً في قائمة المتصلين الآن.
+                    تم تحديد دولتك تلقائياً بناءً على اتصال شبكتك لترتيب أعضاء ({regCountry}) أولاً في قائمة المتواجدين حالياً.
                   </p>
 
                   {!showManualCountryReg ? (
@@ -1122,7 +1122,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                   </div>
 
                   <p className="text-[11px] text-neutral-400 font-tajawal leading-relaxed">
-                    تم تحديد دولتك تلقائياً لترتيب المتصلين من ({guestCountry}) أولاً في قائمة المتصلين الآن.
+                    تم تحديد دولتك تلقائياً لترتيب المتواجدين من ({guestCountry}) أولاً في قائمة المتواجدين حالياً.
                   </p>
 
                   {!showManualCountryGuest ? (
@@ -1189,7 +1189,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                   disabled={loading || !guestAge18Confirmed}
                   className="w-full py-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-sm shadow-lg shadow-teal-600/20 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  {loading ? 'جاري تجهيز جلسة الزائر...' : 'دخول فوري إلى المتصلين الآن'}
+                  {loading ? 'جاري تجهيز جلسة الزائر...' : 'دخول فوري إلى المتواجدين حالياً'}
                 </button>
               </form>
             )}

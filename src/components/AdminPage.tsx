@@ -328,6 +328,18 @@ export const AdminPage: React.FC = () => {
     }
   };
 
+  // Owner Delete VIP Plan
+  const handleDeleteVipPlan = async (planId: string, planName: string) => {
+    if (!confirm(`هل أنت متأكد من رغبتك في حذف باقة "${planName}" نهائياً من المتجر وقاعدة البيانات؟`)) return;
+    try {
+      await apiRequest(`/admin/vip/plans/${planId}`, { method: 'DELETE' });
+      showNotification(`تم حذف باقة "${planName}" بنجاح`);
+      fetchVipPlans();
+    } catch (err: any) {
+      alert(err.message || 'فشل حذف باقة VIP');
+    }
+  };
+
   const handleResolveReport = async (reportId: string, actionTaken: string) => {
     try {
       await apiRequest(`/admin/reports/${reportId}/resolve`, {
@@ -494,7 +506,7 @@ export const AdminPage: React.FC = () => {
             </div>
 
             <div className="p-5 rounded-3xl bg-[#0e1017] border border-neutral-800 space-y-2">
-              <span className="text-xs text-neutral-400 font-tajawal">المتصلون لحظياً</span>
+              <span className="text-xs text-neutral-400 font-tajawal">المتواجدون لحظياً</span>
               <div className="text-2xl font-black font-cairo text-emerald-400">{stats?.onlineCount || 0}</div>
             </div>
 
@@ -909,7 +921,7 @@ export const AdminPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-neutral-800/60">
+                <div className="pt-3 border-t border-neutral-800/60 flex items-center gap-2">
                   <button
                     onClick={() => {
                       setEditingVipPlan({
@@ -917,10 +929,19 @@ export const AdminPage: React.FC = () => {
                         perksText: plan.perks?.join('\n') || ''
                       });
                     }}
-                    className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                    className="flex-1 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
                   >
                     <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-                    تعديل السعر والمميزات
+                    <span>تعديل</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleDeleteVipPlan(plan.id, plan.name)}
+                    className="py-2.5 px-3 rounded-xl bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/80 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                    title="حذف الباقة نهائياً"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>حذف</span>
                   </button>
                 </div>
               </div>
@@ -1277,7 +1298,7 @@ export const AdminPage: React.FC = () => {
                   value={editingVipPlan.perksText || ''}
                   onChange={(e) => setEditingVipPlan({ ...editingVipPlan, perksText: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white leading-relaxed"
-                  placeholder="شارة VIP برونزية مميزة&#10;أولوية ظهور في المتصلين&#10;مضاعفة نقاط الخبرة"
+                  placeholder="شارة VIP برونزية مميزة&#10;أولوية ظهور في المتواجدين&#10;مضاعفة نقاط الخبرة"
                 />
               </div>
 

@@ -30,7 +30,7 @@ import { apiRequest } from './services/api';
 
 function AppContent() {
   const { user, loading } = useAuth();
-  // Default tab after login: "online" ("المتصلون الآن")
+  // Default tab after login: "online" ("المتواجدون حالياً")
   const [currentTab, setCurrentTab] = useState<string>('online');
 
   // Modals state
@@ -40,8 +40,30 @@ function AppContent() {
   const [assistantOpen, setAssistantOpen] = useState<boolean>(false);
   const [legalModalTab, setLegalModalTab] = useState<LegalTab | null>(null);
 
-  // Side Panel Chat State for 'المتصلون الآن'
+  // Side Panel Chat State for 'المتواجدون حالياً'
   const [onlineChatTargetUser, setOnlineChatTargetUser] = useState<OnlineUserItem | null>(null);
+
+  // Mobile popstate / back-gesture integration for online chat panel modal
+  React.useEffect(() => {
+    if (onlineChatTargetUser) {
+      window.history.pushState({ modal: 'online-chat' }, '');
+      const handlePopState = () => {
+        setOnlineChatTargetUser(null);
+      };
+      window.addEventListener('popstate', handlePopState);
+      return () => {
+        window.removeEventListener('popstate', handlePopState);
+      };
+    }
+  }, [onlineChatTargetUser]);
+
+  const handleCloseOnlineChat = () => {
+    if (window.history.state?.modal === 'online-chat') {
+      window.history.back();
+    } else {
+      setOnlineChatTargetUser(null);
+    }
+  };
 
   // Keep track of active chat recipient globally for notification suppression
   React.useEffect(() => {
@@ -133,7 +155,7 @@ function AppContent() {
     return (
       <LandingPage
         onSuccess={() => {
-          // Redirect directly to "المتصلون الآن" upon success
+          // Redirect directly to "المتواجدون حالياً" upon success
           setCurrentTab('online');
         }}
       />
@@ -141,37 +163,36 @@ function AppContent() {
   }
 
   const handleStartChatWithUser = async (targetUserId: string) => {
-    // If we're on the "online" tab, open chat directly in the side panel instead of navigating away!
-    if (currentTab === 'online') {
-      try {
-        const res = await apiRequest<{ profile: any }>(`/users/${targetUserId}`);
-        if (res && res.profile) {
-          setOnlineChatTargetUser({
-            id: res.profile.id,
-            username: res.profile.username,
-            gender: res.profile.gender || 'male',
-            country: res.profile.country || 'السعودية',
-            bio: res.profile.bio || '',
-            avatarUrl: res.profile.avatarUrl || '',
-            level: res.profile.level || 0,
-            vipLevel: res.profile.vipLevel || 'none',
-            isOnline: !!res.profile.isOnline,
-            interests: res.profile.interests || [],
-            isPinned: !!res.profile.isPinned,
-            equippedBadge: res.profile.equippedBadge,
-            equippedFrame: res.profile.equippedFrame,
-            isGuest: !!res.profile.isGuest
-          });
-          setSelectedProfileId(null);
-          return;
-        }
-      } catch (e) {
-        console.error('Failed to load profile for side panel chat', e);
+    try {
+      const res = await apiRequest<{ profile: any }>(`/users/${targetUserId}`);
+      if (res && res.profile) {
+        setOnlineChatTargetUser({
+          id: res.profile.id,
+          username: res.profile.username,
+          gender: res.profile.gender || 'male',
+          country: res.profile.country || 'السعودية',
+          bio: res.profile.bio || '',
+          avatarUrl: res.profile.avatarUrl || '',
+          level: res.profile.level || 0,
+          vipLevel: res.profile.vipLevel || 'none',
+          isOnline: !!res.profile.isOnline,
+          interests: res.profile.interests || [],
+          isPinned: !!res.profile.isPinned,
+          equippedBadge: res.profile.equippedBadge,
+          equippedFrame: res.profile.equippedFrame,
+          isGuest: !!res.profile.isGuest
+        });
+        setSelectedProfileId(null);
+        setCurrentTab('online');
+        return;
       }
+    } catch (e) {
+      console.error('Failed to load profile for side panel chat', e);
     }
 
-    setChatRecipientId(targetUserId);
-    setCurrentTab('messages');
+    // Fallback: switch to online tab and close profile
+    setSelectedProfileId(null);
+    setCurrentTab('online');
   };
 
   const handleOpenGiftsForUser = (targetUserId: string) => {
@@ -195,17 +216,9 @@ function AppContent() {
         onlineChatTargetUser ? (
           <>
             {/* Desktop Side-by-Side: Online Users List alongside Chat Panel */}
-            <div className="hidden lg:grid lg:grid-cols-12 gap-6 items-start">
-              <div className="lg:col-span-7 xl:col-span-8 space-y-4">
-                <div className="flex items-center justify-between text-xs text-neutral-400 font-tajawal bg-neutral-900/60 p-2.5 rounded-xl border border-neutral-800">
-                  <span>المحادثة مفتوحة بجانب قائمة المتصلين</span>
-                  <button
-                    onClick={() => setOnlineChatTargetUser(null)}
-                    className="text-xs text-rose-400 hover:text-rose-300 font-bold transition-colors cursor-pointer"
-                  >
-                    إغلاق المحادثة الجانبية ✕
-                  </button>
-                </div>
+            <div className="hidden lg:grid lg:grid-cols-12 gap-5 items-start">
+              {/* Online Users Side List (Right in RTL) */}
+              <div className="lg:col-span-5 xl:col-span-4 space-y-3.5 sticky top-20">
                 <OnlineUsersPage
                   onOpenProfile={(id) => setSelectedProfileId(id)}
                   onStartChat={(targetUser) => setOnlineChatTargetUser(targetUser)}
@@ -214,11 +227,23 @@ function AppContent() {
                 />
               </div>
 
-              {/* Chat Side Panel on Desktop */}
-              <div className="lg:col-span-5 xl:col-span-4 sticky top-20">
+              {/* Chat Panel (Left in RTL - Main Area) */}
+              <div className="lg:col-span-7 xl:col-span-8 space-y-3">
+                <div className="flex items-center justify-between text-xs text-neutral-400 font-tajawal bg-[#090c13] p-2.5 rounded-2xl border border-neutral-800">
+                  <span className="font-bold text-emerald-400 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    المحادثة مفتوحة بجانب قائمة المتواجدين حالياً
+                  </span>
+                  <button
+                    onClick={handleCloseOnlineChat}
+                    className="text-xs text-rose-400 hover:text-rose-300 font-bold transition-colors cursor-pointer"
+                  >
+                    إغلاق المحادثة الجانبية ✕
+                  </button>
+                </div>
                 <OnlineChatPanel
                   targetUser={onlineChatTargetUser}
-                  onClose={() => setOnlineChatTargetUser(null)}
+                  onClose={handleCloseOnlineChat}
                   onOpenProfile={(id) => setSelectedProfileId(id)}
                   isMobileModal={false}
                 />
@@ -229,7 +254,7 @@ function AppContent() {
             <div className="block lg:hidden">
               <OnlineChatPanel
                 targetUser={onlineChatTargetUser}
-                onClose={() => setOnlineChatTargetUser(null)}
+                onClose={handleCloseOnlineChat}
                 onOpenProfile={(id) => setSelectedProfileId(id)}
                 isMobileModal={true}
               />

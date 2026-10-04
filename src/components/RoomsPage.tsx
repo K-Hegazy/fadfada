@@ -77,7 +77,7 @@ export const RoomsPage: React.FC = () => {
     try {
       setLoading(true);
       const res = await apiRequest<{ rooms: Room[] }>('/rooms');
-      setRooms(res.rooms);
+      setRooms(res.rooms || []);
     } catch (err) {
       console.error('Error fetching rooms:', err);
     } finally {
@@ -93,13 +93,17 @@ export const RoomsPage: React.FC = () => {
       );
       setActiveRoomId(roomId);
       setActiveRoom(res.room);
-      setRoomMessages(res.messages);
-      setRoomMembers(res.members);
+      setRoomMessages(res.messages || []);
+      setRoomMembers(res.members || []);
       scrollToBottom();
     } catch (err) {
       console.error('Error entering room:', err);
     }
   };
+
+  useEffect(() => {
+    fetchRooms();
+  }, []);
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -107,45 +111,78 @@ export const RoomsPage: React.FC = () => {
     }, 100);
   };
 
+  // WebSockets for Real-time chat & Audio stage in room
   useEffect(() => {
-    fetchRooms();
+    if (!activeRoomId) return;
 
-    // Listen for room messages
-    const unsub = socketService.on('room:message', (data: any) => {
-      if (data.roomId === activeRoomId) {
+    socketService.send({ type: 'room:join', roomId: activeRoomId });
+
+    // Fetch live audio speakers
+    apiRequest<{ speakers: AudioSpeaker[] }>(`/rooms/${activeRoomId}/audio-speakers`)
+      .then(res => setAudioSpeakers(res.speakers || []))
+      .catch(() => {});
+
+    const unsubMsg = socketService.on('room:message', (data: any) => {
+      if (data.roomId === activeRoomId && data.message) {
         setRoomMessages(prev => [...prev, data.message]);
         scrollToBottom();
       }
     });
 
-    const unsubTyping = socketService.on('room:typing', (data: any) => {
-      if (data.roomId === activeRoomId) {
-        setPartnerTyping(data.username);
-        setTimeout(() => setPartnerTyping(null), 2500);
+    const unsubJoin = socketService.on('room:user_joined', (data: any) => {
+      if (data.roomId === activeRoomId && data.user) {
+        setRoomMembers(prev => {
+          if (prev.some(m => m.id === data.user.id)) return prev;
+          return [...prev, data.user];
+        });
       }
     });
 
-    // Listen for live audio room state
-    const unsubAudio = socketService.on('audio:state', (data: any) => {
-      if (data && data.roomId === activeRoomId) {
-        setAudioSpeakers(data.speakers || []);
-        // Check if current user is still in speaker list
-        if (user && data.speakers) {
-          const amSpeaker = data.speakers.some((s: any) => s.user_id === user.id);
-          if (!amSpeaker && isOnAudioStage) {
-            leaveAudioStage();
+    const unsubLeave = socketService.on('room:user_left', (data: any) => {
+      if (data.roomId === activeRoomId && data.userId) {
+        setRoomMembers(prev => prev.filter(m => m.id !== data.userId));
+        setAudioSpeakers(prev => prev.filter(s => s.user_id !== data.userId));
+      }
+    });
+
+    const unsubTyping = socketService.on('room:typing', (data: any) => {
+      if (data.roomId === activeRoomId && data.userId !== user?.id) {
+        setPartnerTyping(data.username);
+        setTimeout(() => setPartnerTyping(null), 3000);
+      }
+    });
+
+    const unsubAudio = socketService.on('room:audio_speaker_update', (data: any) => {
+      if (data.roomId === activeRoomId && data.speaker) {
+        setAudioSpeakers(prev => {
+          const idx = prev.findIndex(s => s.user_id === data.speaker.user_id);
+          if (idx !== -1) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], ...data.speaker };
+            return next;
           }
-        }
+          return [...prev, data.speaker];
+        });
+      }
+    });
+
+    const unsubAudioLeave = socketService.on('room:audio_speaker_leave', (data: any) => {
+      if (data.roomId === activeRoomId && data.userId) {
+        setAudioSpeakers(prev => prev.filter(s => s.user_id !== data.userId));
       }
     });
 
     return () => {
-      unsub();
+      leaveAudioStage();
+      socketService.send({ type: 'room:leave', roomId: activeRoomId });
+      unsubMsg();
+      unsubJoin();
+      unsubLeave();
       unsubTyping();
       unsubAudio();
-      leaveAudioStage();
+      unsubAudioLeave();
     };
-  }, [activeRoomId, user?.id]);
+  }, [activeRoomId]);
 
   const joinAudioStage = async () => {
     if (!activeRoomId) return;
@@ -154,114 +191,152 @@ export const RoomsPage: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localStreamRef.current = stream;
 
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        const ctx = new AudioCtx();
-        audioContextRef.current = ctx;
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioCtx;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
 
-        const src = ctx.createMediaStreamSource(stream);
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        src.connect(analyser);
-        analyserRef.current = analyser;
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
 
-        const buffer = new Uint8Array(analyser.frequencyBinCount);
-        let wasSpeaking = false;
-
-        const checkVolume = () => {
-          if (!analyserRef.current) return;
-          analyserRef.current.getByteFrequencyData(buffer);
-          let sum = 0;
-          for (let i = 0; i < buffer.length; i++) sum += buffer[i];
-          const avg = sum / buffer.length;
-          const isSpeaking = avg > 25;
-
-          if (isSpeaking !== wasSpeaking) {
-            wasSpeaking = isSpeaking;
-            socketService.send({
-              type: 'audio:speaking_state',
-              roomId: activeRoomId,
-              isSpeaking
-            });
-          }
-          animFrameRef.current = requestAnimationFrame(checkVolume);
-        };
-        animFrameRef.current = requestAnimationFrame(checkVolume);
-      }
-
-      socketService.send({ type: 'audio:join', roomId: activeRoomId });
+      await apiRequest(`/rooms/${activeRoomId}/audio-stage/join`, { method: 'POST' });
       setIsOnAudioStage(true);
       setIsMicMuted(false);
+
+      socketService.send({
+        type: 'room:audio_speaker_join',
+        roomId: activeRoomId,
+        speaker: {
+          user_id: user?.id,
+          username: user?.username,
+          avatar_url: user?.avatarUrl,
+          gender: user?.gender,
+          role: user?.role,
+          is_speaking: 0,
+          is_muted: 0
+        }
+      });
+
+      const checkVolume = () => {
+        if (!analyserRef.current || !isOnAudioStage) return;
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+        const isSpeaking = avg > 20 ? 1 : 0;
+
+        socketService.send({
+          type: 'room:audio_speaker_speaking',
+          roomId: activeRoomId,
+          userId: user?.id,
+          isSpeaking
+        });
+
+        animFrameRef.current = requestAnimationFrame(checkVolume);
+      };
+      checkVolume();
     } catch (err: any) {
-      console.warn('Audio device access notice:', err);
-      setAudioError('يرجى السماح بالوصول إلى الميكروفون للصعود للمنصة الصوتية.');
-      setTimeout(() => setAudioError(null), 5000);
+      console.error('Audio stage error:', err);
+      setAudioError('يرجى منح إذن الميكروفون للصعود للمنصة الصوتية');
     }
   };
 
-  const toggleMicMute = () => {
+  const leaveAudioStage = async () => {
+    if (!activeRoomId || !isOnAudioStage) return;
+    try {
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(t => t.stop());
+        localStreamRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+
+      await apiRequest(`/rooms/${activeRoomId}/audio-stage/leave`, { method: 'POST' });
+      setIsOnAudioStage(false);
+      setIsMicMuted(false);
+
+      socketService.send({
+        type: 'room:audio_speaker_leave',
+        roomId: activeRoomId,
+        userId: user?.id
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const toggleMicMute = async () => {
+    if (!activeRoomId || !isOnAudioStage) return;
+    const newMuted = !isMicMuted;
     if (localStreamRef.current) {
-      const newMuted = !isMicMuted;
       localStreamRef.current.getAudioTracks().forEach(t => {
         t.enabled = !newMuted;
       });
-      setIsMicMuted(newMuted);
-      if (activeRoomId) {
-        socketService.send({ type: 'audio:mute_toggle', roomId: activeRoomId });
-      }
+    }
+    setIsMicMuted(newMuted);
+
+    try {
+      await apiRequest(`/rooms/${activeRoomId}/audio-stage/mute`, {
+        method: 'POST',
+        body: JSON.stringify({ isMuted: newMuted ? 1 : 0 })
+      });
+      socketService.send({
+        type: 'room:audio_speaker_mute',
+        roomId: activeRoomId,
+        userId: user?.id,
+        isMuted: newMuted ? 1 : 0
+      });
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  const leaveAudioStage = () => {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(t => t.stop());
-      localStreamRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-    if (activeRoomId) {
-      socketService.send({ type: 'audio:leave', roomId: activeRoomId });
-    }
-    setIsOnAudioStage(false);
-    setIsMicMuted(false);
-  };
-
-  const handleSendRoomMessage = async (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!roomInput.trim() || !activeRoomId) return;
 
-    const content = roomInput;
+    const content = roomInput.trim();
     setRoomInput('');
 
     try {
-      const res = await apiRequest(`/rooms/${activeRoomId}/messages`, {
-        method: 'POST',
-        body: JSON.stringify({ content, type: 'text' })
-      });
+      const res = await apiRequest<{ success: boolean; message: RoomMessage }>(
+        `/rooms/${activeRoomId}/messages`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ content })
+        }
+      );
       setRoomMessages(prev => [...prev, res.message]);
       scrollToBottom();
-    } catch (err: any) {
-      alert(err.message || 'خطأ في إرسال الرسالة');
+      socketService.send({
+        type: 'room:message',
+        roomId: activeRoomId,
+        message: res.message
+      });
+    } catch (err) {
+      console.error('Failed to send room message:', err);
     }
   };
 
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    setCreateError('');
-    setCreateLoading(true);
+    if (!newRoomName.trim()) return;
 
+    setCreateLoading(true);
+    setCreateError('');
     try {
-      const res = await apiRequest('/rooms', {
+      const res = await apiRequest<{ success: boolean; roomId: string }>('/rooms', {
         method: 'POST',
         body: JSON.stringify({
-          name: newRoomName,
-          description: newRoomDesc,
+          name: newRoomName.trim(),
+          description: newRoomDesc.trim(),
           category: newRoomCategory,
           rules: newRoomRules,
           isPrivate: newRoomPrivate
@@ -284,67 +359,137 @@ export const RoomsPage: React.FC = () => {
   const canCreateRoom = user?.role === 'owner' || user?.role === 'admin';
 
   return (
-    <div className="space-y-6 animate-in fade-in">
+    <div className="space-y-4 animate-in fade-in" dir="rtl">
       {/* Rooms Directory Header */}
-      {!activeRoomId && (
-        <div className="p-6 rounded-3xl bg-gradient-to-r from-neutral-900 via-neutral-900/90 to-teal-950/40 border border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Compass className="w-6 h-6 text-teal-400" />
-              <h1 className="text-2xl sm:text-3xl font-cairo font-black text-white">الغرف والمجالس الحوارية</h1>
+      <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-neutral-900 via-neutral-900/90 to-teal-950/40 border border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-teal-600/30 border border-teal-500/40 flex items-center justify-center text-teal-400">
+              <Compass className="w-5 h-5" />
             </div>
-            <p className="text-sm text-neutral-400 font-tajawal max-w-xl">
-              مساحات حوارية جماعية متخصصة للنقاش الراقي وتبادل الأفكار. هذا القسم منفصل كلياً عن المتصلين الآن.
-            </p>
+            <h1 className="text-xl sm:text-2xl font-cairo font-black text-white">
+              الغرف والمجالس الحوارية
+            </h1>
+          </div>
+          <p className="text-xs sm:text-sm text-neutral-400 font-tajawal max-w-xl">
+            مساحات حوارية جماعية متخصصة للنقاش الراقي وتبادل الأفكار والصعود للمنصة الصوتية الحية.
+          </p>
+        </div>
+
+        {canCreateRoom && (
+          <button
+            onClick={() => setCreateModalOpen(true)}
+            className="px-4 py-2.5 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-teal-600/20 shrink-0 active:scale-95"
+          >
+            <Plus className="w-4 h-4" />
+            <span>إنشاء مجلس جديد</span>
+          </button>
+        )}
+      </div>
+
+      {/* DUAL-PANE SIDE-BY-SIDE VIEW (Like Online Users & Chat) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        {/* RIGHT (RTL): SIDE LIST OF ROOMS */}
+        <div className={`space-y-3 ${activeRoomId ? 'hidden lg:block lg:col-span-4' : 'col-span-12'}`}>
+          <div className="p-3 rounded-2xl bg-[#090b10] border border-neutral-800 flex items-center justify-between">
+            <span className="font-cairo font-bold text-xs sm:text-sm text-white flex items-center gap-1.5">
+              <Compass className="w-4 h-4 text-teal-400" />
+              قائمة المجالس المتاحة
+            </span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-950/80 text-teal-300 border border-teal-800/50 font-bold">
+              {rooms.length} مجلس
+            </span>
           </div>
 
-          {canCreateRoom && (
-            <button
-              onClick={() => setCreateModalOpen(true)}
-              className="px-5 py-3 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-sm flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-teal-600/20 shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إنشاء مجلس حواري جديد</span>
-            </button>
+          {loading ? (
+            <div className="space-y-2.5">
+              {[1, 2, 3].map(n => (
+                <div key={n} className="h-24 rounded-2xl bg-neutral-900/40 border border-neutral-800 animate-pulse" />
+              ))}
+            </div>
+          ) : rooms.length === 0 ? (
+            <div className="p-8 text-center rounded-3xl bg-[#090b10] border border-neutral-800 space-y-3">
+              <Compass className="w-10 h-10 text-neutral-600 mx-auto" />
+              <h3 className="font-cairo font-bold text-sm text-white">لا توجد مجالس منشأة حتى الآن</h3>
+              <p className="text-xs text-neutral-400 font-tajawal">
+                يتم إنشاء المجالس حصرياً من قبل مالك المنصة والإدارة.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {rooms.map(room => {
+                const isSelected = room.id === activeRoomId;
+                return (
+                  <button
+                    key={room.id}
+                    type="button"
+                    onClick={() => enterRoom(room.id)}
+                    className={`w-full text-right p-3.5 rounded-2xl border transition-all cursor-pointer active:scale-[0.99] flex flex-col justify-between gap-2.5 ${
+                      isSelected
+                        ? 'border-teal-500 bg-[#0f1722] ring-2 ring-teal-500/40 shadow-lg shadow-teal-950/50'
+                        : 'border-neutral-800/80 bg-[#0c0f16] hover:bg-[#111520] hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-teal-950/80 text-teal-300 border border-teal-800/50 font-bold">
+                        {room.category}
+                      </span>
+                      {room.is_private === 1 && <Lock className="w-3.5 h-3.5 text-amber-400" />}
+                    </div>
+
+                    <div>
+                      <h3 className="font-cairo font-bold text-sm text-white">{room.name}</h3>
+                      <p className="text-xs text-neutral-400 line-clamp-1 font-tajawal mt-0.5">
+                        {room.description || 'مجلس حواري راقٍ لتبادل الرأي'}
+                      </p>
+                    </div>
+
+                    <div className="pt-2 border-t border-neutral-850 flex items-center justify-between text-[11px] text-neutral-400 w-full">
+                      <span className="flex items-center gap-1">
+                        <Users className="w-3.5 h-3.5 text-teal-400" />
+                        {room.member_count || 1} حاضر
+                      </span>
+                      <span className="text-teal-400 font-bold">
+                        {isSelected ? 'المجلس الحالي ✓' : 'دخول المجلس ←'}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
-      )}
 
-      {/* ACTIVE ROOM VIEW */}
-      {activeRoomId && activeRoom ? (
-        <div className="h-[calc(100vh-10rem)] rounded-3xl bg-[#090b10] border border-neutral-800 flex flex-col md:flex-row overflow-hidden shadow-2xl">
-          {/* Main Chat Stream */}
-          <div className="flex-1 flex flex-col justify-between">
-            {/* Room Header */}
-            <div className="h-18 px-6 border-b border-neutral-800/80 bg-[#07090e] flex items-center justify-between">
+        {/* LEFT (RTL): ACTIVE ROOM CONVERSATION & AUDIO STAGE */}
+        {activeRoomId && activeRoom ? (
+          <div className="col-span-12 lg:col-span-8 h-[calc(100vh-12rem)] min-h-[550px] rounded-3xl bg-[#090b10] border border-neutral-800 flex flex-col overflow-hidden shadow-2xl">
+            {/* Active Room Top Bar */}
+            <div className="h-16 px-4 sm:px-6 border-b border-neutral-800/80 bg-[#07090e] flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setActiveRoomId(null)}
-                  className="text-xs text-neutral-400 hover:text-white px-2 py-1 rounded bg-neutral-900 border border-neutral-800 cursor-pointer"
+                  className="lg:hidden text-xs text-neutral-300 hover:text-white px-2.5 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800 cursor-pointer"
                 >
-                  ← خروج من المجلس
+                  ← العودة للمجالس
                 </button>
                 <div>
-                  <h2 className="font-cairo font-black text-lg text-white flex items-center gap-2">
+                  <h2 className="font-cairo font-black text-base sm:text-lg text-white flex items-center gap-2">
                     {activeRoom.name}
-                    <span className="text-xs px-2 py-0.5 rounded bg-teal-950/80 text-teal-300 border border-teal-800/50">
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-teal-950/80 text-teal-300 border border-teal-800/50">
                       {activeRoom.category}
                     </span>
                   </h2>
-                  <p className="text-xs text-neutral-400 truncate max-w-md font-tajawal">
-                    {activeRoom.description || 'مجلس حواري راقٍ لتبادل الرأي والفضفضة'}
-                  </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 text-xs text-neutral-400">
                 <Users className="w-4 h-4 text-teal-400" />
-                <span>{roomMembers.length} حاضر في المجلس</span>
+                <span>{roomMembers.length} حاضر</span>
               </div>
             </div>
 
-            {/* Live Audio Room Stage (Free WebRTC & Web Audio Integration) */}
-            <div className="bg-gradient-to-r from-[#0c1017] via-[#0f1420] to-[#0c1017] border-b border-neutral-800/80 px-6 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-inner">
+            {/* Live Audio Room Stage */}
+            <div className="bg-gradient-to-r from-[#0c1017] via-[#0f1420] to-[#0c1017] border-b border-neutral-800/80 px-4 sm:px-6 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-inner">
               <div className="flex items-center gap-3 w-full sm:w-auto">
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="relative flex h-2.5 w-2.5">
@@ -362,7 +507,7 @@ export const RoomsPage: React.FC = () => {
                   {audioSpeakers.length === 0 ? (
                     <span className="text-[11px] text-neutral-500 font-tajawal">المايك متاح للحاضرين في المجلس</span>
                   ) : (
-                    audioSpeakers.map((spk) => {
+                    audioSpeakers.map(spk => {
                       const isTalking = spk.is_speaking === 1;
                       const isMuted = spk.is_muted === 1;
                       return (
@@ -387,9 +532,6 @@ export const RoomsPage: React.FC = () => {
                           <span className="text-[11px] font-tajawal font-medium text-neutral-200 max-w-[80px] truncate">
                             {spk.username}
                           </span>
-                          {isUserOwner({ role: spk.role, username: spk.username }) && (
-                            <OwnerBadge size="xs" showLabel={false} />
-                          )}
                           {isMuted ? (
                             <MicOff className="w-3 h-3 text-rose-400 shrink-0" />
                           ) : (
@@ -440,48 +582,53 @@ export const RoomsPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Room Messages */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {/* Room Messages Feed */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5">
               {roomMessages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-3">
-                  <div className="w-14 h-14 rounded-full bg-teal-950/40 border border-teal-800/40 flex items-center justify-center text-teal-400">
-                    <MessageSquare className="w-7 h-7" />
+                  <div className="w-12 h-12 rounded-full bg-teal-950/40 border border-teal-800/40 flex items-center justify-center text-teal-400">
+                    <MessageSquare className="w-6 h-6" />
                   </div>
-                  <h3 className="font-cairo font-bold text-white text-lg">المجلس مفتوح للحديث</h3>
-                  <p className="text-xs text-neutral-400 max-w-sm font-tajawal">
-                    كن أول من يفتتح الحوار في هذا المجلس بكلمات طيبة وفائدة للحاضرين.
+                  <h3 className="font-cairo font-bold text-white text-base">المجلس مفتوح للحديث</h3>
+                  <p className="text-xs text-neutral-400 font-tajawal max-w-sm">
+                    ابدأ المحادثة وشارك أفكارك مع الحاضرين في المجلس الآن!
                   </p>
                 </div>
               ) : (
-                roomMessages.map((m) => {
-                  const isMine = m.sender_id === user?.id;
-                  const isFemale = m.sender_gender === 'female';
-
+                roomMessages.map(msg => {
+                  const isMe = msg.sender_id === user?.id;
+                  const isFemale = msg.gender === 'female';
                   return (
-                    <div key={m.id} className="flex items-start gap-3">
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-cairo font-bold text-xs shrink-0 border ${
-                        isFemale ? 'bg-rose-950/60 text-rose-300 border-rose-800/50' : 'bg-sky-950/60 text-sky-300 border-sky-800/50'
-                      }`}>
-                        {m.sender_username?.slice(0, 1).toUpperCase()}
+                    <div
+                      key={msg.id}
+                      className={`flex gap-3 items-start ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
+                    >
+                      <div
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
+                          isFemale ? 'bg-rose-950 text-rose-300' : 'bg-sky-950 text-sky-300'
+                        }`}
+                      >
+                        {msg.username.slice(0, 1).toUpperCase()}
                       </div>
 
-                      <div className="space-y-1 max-w-[85%]">
-                        <div className="flex items-center gap-2">
-                          <span className={`font-cairo font-bold text-xs ${isFemale ? 'text-rose-300' : 'text-sky-300'}`}>
-                            {m.sender_username}
-                          </span>
-                          {isUserOwner({ role: (m as any).sender_role || (m as any).senderRole, username: m.sender_username }) && (
+                      <div className={`space-y-1 max-w-[80%] ${isMe ? 'text-left' : 'text-right'}`}>
+                        <div className="flex items-center gap-1.5 text-[11px] text-neutral-400">
+                          <span className="font-bold text-white">{msg.username}</span>
+                          {isUserOwner({ role: msg.role, username: msg.username }) && (
                             <OwnerBadge size="xs" />
                           )}
-                          <span className="text-[10px] text-neutral-500 font-tajawal">
-                            {new Date(m.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
+                          <span>·</span>
+                          <span>{new Date(msg.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
 
-                        <div className={`p-3 rounded-2xl text-sm leading-relaxed ${
-                          isMine ? 'bg-teal-900/60 border border-teal-700/60 text-teal-100' : 'bg-neutral-900/80 border border-neutral-800 text-neutral-200'
-                        }`}>
-                          <p className="whitespace-pre-wrap font-tajawal">{m.content}</p>
+                        <div
+                          className={`p-3 rounded-2xl text-xs sm:text-sm font-tajawal leading-relaxed ${
+                            isMe
+                              ? 'bg-teal-600 text-white rounded-tr-none'
+                              : 'bg-neutral-900 border border-neutral-800 text-neutral-200 rounded-tl-none'
+                          }`}
+                        >
+                          {msg.content}
                         </div>
                       </div>
                     </div>
@@ -491,142 +638,29 @@ export const RoomsPage: React.FC = () => {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Room Input Bar */}
-            <div className="p-4 border-t border-neutral-800/80 bg-[#07090e]">
-              {partnerTyping && (
-                <div className="text-[11px] text-teal-400 px-2 pb-1 animate-pulse font-tajawal">
-                  {partnerTyping} يشارك الآن...
-                </div>
-              )}
-              <form onSubmit={handleSendRoomMessage} className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={roomInput}
-                  onChange={(e) => setRoomInput(e.target.value)}
-                  placeholder="اكتب مشاركتك في المجلس..."
-                  className="flex-1 px-4 py-3 rounded-2xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-500 text-sm focus:outline-none focus:border-teal-500"
-                />
-                <button
-                  type="submit"
-                  disabled={!roomInput.trim()}
-                  className="p-3.5 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-bold transition-all shadow-lg shadow-teal-600/20 cursor-pointer disabled:opacity-50"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
-              </form>
-            </div>
+            {/* Input Bar */}
+            <form onSubmit={handleSendMessage} className="p-3 sm:p-4 bg-[#07090e] border-t border-neutral-800 flex gap-2">
+              <input
+                type="text"
+                value={roomInput}
+                onChange={e => setRoomInput(e.target.value)}
+                placeholder="اكتب رسالتك في المجلس..."
+                className="flex-1 bg-neutral-900/80 border border-neutral-800 focus:border-teal-500 rounded-2xl px-4 py-2.5 text-xs sm:text-sm text-white placeholder-neutral-500 outline-none font-tajawal"
+              />
+              <button
+                type="submit"
+                disabled={!roomInput.trim()}
+                className="px-5 py-2.5 rounded-2xl bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-teal-600/20"
+              >
+                <Send className="w-4 h-4" />
+                <span className="hidden sm:inline">إرسال</span>
+              </button>
+            </form>
           </div>
+        ) : null}
+      </div>
 
-          {/* Room Members & Rules Sidebar */}
-          <div className="w-full md:w-64 border-r border-neutral-800/80 bg-[#07090e] p-4 flex flex-col space-y-4">
-            {activeRoom.rules && (
-              <div className="p-3 rounded-2xl bg-amber-950/30 border border-amber-800/40 text-xs text-amber-200/90 font-tajawal space-y-1">
-                <div className="font-bold flex items-center gap-1 text-amber-300">
-                  <Shield className="w-3.5 h-3.5" />
-                  قوانين المجلس
-                </div>
-                <p>{activeRoom.rules}</p>
-              </div>
-            )}
-
-            <div className="font-cairo font-bold text-sm text-neutral-300 border-b border-neutral-800 pb-2 flex items-center justify-between">
-              <span>الحاضرون في المجلس</span>
-              <span className="text-xs text-teal-400 font-semibold">{roomMembers.length}</span>
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-2">
-              {roomMembers.map((m) => (
-                <div key={m.id} className="flex items-center gap-2.5 p-2 rounded-xl bg-neutral-900/40 border border-neutral-800/40">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${
-                    m.gender === 'female' ? 'bg-rose-950 text-rose-300' : 'bg-sky-950 text-sky-300'
-                  }`}>
-                    {m.username.slice(0, 1).toUpperCase()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-bold text-white truncate flex items-center gap-1">
-                      {m.username}
-                      {m.room_role === 'owner' && <Crown className="w-3 h-3 text-amber-400" />}
-                    </div>
-                    <div className="text-[10px] text-neutral-500">{m.isOnline ? 'متصل' : 'غائب'}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* ROOMS DIRECTORY GRID */
-        <div className="space-y-6">
-          {loading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[1, 2, 3].map((n) => (
-                <div key={n} className="h-44 rounded-3xl bg-neutral-900/40 border border-neutral-800 animate-pulse" />
-              ))}
-            </div>
-          ) : rooms.length === 0 ? (
-            /* ZERO DEMO ROOMS STATE (STRICT REQUIREMENT) */
-            <div className="p-12 text-center rounded-3xl bg-neutral-900/30 border border-neutral-800/80 space-y-4 max-w-xl mx-auto">
-              <div className="w-16 h-16 rounded-full bg-teal-950/40 border border-teal-800/40 flex items-center justify-center text-teal-400 mx-auto">
-                <Compass className="w-8 h-8" />
-              </div>
-              <h3 className="font-cairo font-bold text-xl text-white">لا توجد مجالس منشأة حتى الآن</h3>
-              <p className="text-sm text-neutral-400 font-tajawal leading-relaxed">
-                وفقاً لسياسة منصة فضفضه، لا يتم إنشاء غرف وهمية أو تجريبية. يتم إنشاء المجالس الحوارية حصرياً من قبل مالك المنصة (Hegazy) والإدارة.
-              </p>
-              {canCreateRoom && (
-                <button
-                  onClick={() => setCreateModalOpen(true)}
-                  className="px-6 py-3 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-sm shadow-lg shadow-teal-600/20 cursor-pointer"
-                >
-                  إنشاء أول مجلس الآن بصفتك إدارة
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {rooms.map((room) => (
-                <div
-                  key={room.id}
-                  onClick={() => enterRoom(room.id)}
-                  className="p-6 rounded-3xl bg-[#0e1017] hover:bg-[#121520] border border-neutral-800/80 hover:border-teal-700/60 transition-all cursor-pointer shadow-lg space-y-4 flex flex-col justify-between group"
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs px-3 py-1 rounded-full bg-teal-950/80 text-teal-300 border border-teal-800/50 font-bold">
-                        {room.category}
-                      </span>
-                      {room.is_private === 1 && (
-                        <Lock className="w-4 h-4 text-amber-400" />
-                      )}
-                    </div>
-
-                    <div>
-                      <h3 className="font-cairo font-black text-lg text-white group-hover:text-teal-400 transition-colors">
-                        {room.name}
-                      </h3>
-                      <p className="text-xs text-neutral-400 line-clamp-2 mt-1 font-tajawal">
-                        {room.description || 'انضم للمجلس للمشاركة في النقاش وطرح الآراء'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="pt-3 border-t border-neutral-900 flex items-center justify-between text-xs text-neutral-400">
-                    <span className="flex items-center gap-1.5">
-                      <Users className="w-4 h-4 text-teal-400" />
-                      {room.member_count || 1} عضو
-                    </span>
-                    <span className="text-teal-400 font-bold group-hover:-translate-x-1 transition-transform">
-                      دخول المجلس ←
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Create Room Modal (Owner / Admin Only) */}
+      {/* Create Room Modal */}
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
           <div className="relative w-full max-w-md bg-[#0e1017] border border-neutral-800 rounded-3xl p-6 shadow-2xl space-y-5">
@@ -653,7 +687,7 @@ export const RoomsPage: React.FC = () => {
                   type="text"
                   required
                   value={newRoomName}
-                  onChange={(e) => setNewRoomName(e.target.value)}
+                  onChange={e => setNewRoomName(e.target.value)}
                   placeholder="مثال: مجلس شعراء وأدباء فضفضه"
                   className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-sm focus:outline-none focus:border-teal-500"
                 />
@@ -663,10 +697,10 @@ export const RoomsPage: React.FC = () => {
                 <label className="block text-xs font-semibold text-neutral-300 mb-1.5">التصنيف</label>
                 <select
                   value={newRoomCategory}
-                  onChange={(e) => setNewRoomCategory(e.target.value)}
+                  onChange={e => setNewRoomCategory(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-sm"
                 >
-                  {ROOM_CATEGORIES.map((cat) => (
+                  {ROOM_CATEGORIES.map(cat => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
@@ -677,7 +711,7 @@ export const RoomsPage: React.FC = () => {
                 <textarea
                   rows={2}
                   value={newRoomDesc}
-                  onChange={(e) => setNewRoomDesc(e.target.value)}
+                  onChange={e => setNewRoomDesc(e.target.value)}
                   placeholder="نبذة عن موضوع النقاش في هذا المجلس"
                   className="w-full px-4 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-sm resize-none"
                 />
@@ -688,7 +722,7 @@ export const RoomsPage: React.FC = () => {
                 <input
                   type="text"
                   value={newRoomRules}
-                  onChange={(e) => setNewRoomRules(e.target.value)}
+                  onChange={e => setNewRoomRules(e.target.value)}
                   placeholder="مثال: يمنع الجدال السياسي، احترام الجميع شرط أساسي"
                   className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-sm"
                 />

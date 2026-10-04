@@ -7,14 +7,12 @@ import {
   MessageCircle,
   UserPlus,
   Sparkles,
-  Bell,
   Target,
   Award,
   Trophy,
   Dices,
   Coins,
   ShoppingBag,
-  User,
   Settings,
   ShieldAlert,
   LogOut,
@@ -35,6 +33,20 @@ interface AppLayoutProps {
   children: React.ReactNode;
 }
 
+interface NavItem {
+  key: string;
+  label: string;
+  icon: any;
+  badge?: number | null;
+  memberOnly?: boolean;
+  adminOnly?: boolean;
+}
+
+interface NavSection {
+  title: string;
+  items: NavItem[];
+}
+
 export const AppLayout: React.FC<AppLayoutProps> = ({
   currentTab,
   onNavigate,
@@ -46,24 +58,43 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
   const isModeratorOrAbove = user?.role === 'moderator' || user?.role === 'admin' || user?.role === 'owner';
 
-  const baseNavItems = [
-    { key: 'online', label: 'المتصلون الآن', icon: Users, badge: null },
-    { key: 'rooms', label: 'الغرف والمجالس', icon: Compass, badge: null },
-    { key: 'events', label: 'الفعاليات', icon: Calendar, badge: null },
-    { key: 'news', label: 'المنشورات والأخبار', icon: Newspaper, badge: null },
-    { key: 'messages', label: 'الرسائل', icon: MessageCircle, badge: user?.unreadMessages },
-    { key: 'friends', label: 'الأصدقاء', icon: UserPlus, badge: user?.pendingFriendRequests },
-    { key: 'stories', label: 'القصص (24h)', icon: Sparkles, badge: null },
-    { key: 'shop', label: 'متجر الشارات والمميزات', icon: ShoppingBag, badge: null },
-    { key: 'missions', label: 'المهام اليومية', icon: Target, badge: null, memberOnly: true },
-    { key: 'achievements', label: 'الإنجازات', icon: Award, badge: null, memberOnly: true },
-    { key: 'levels', label: 'المستويات والشرف', icon: Trophy, badge: null, memberOnly: true },
-    { key: 'games', label: 'الألعاب والمسابقات', icon: Dices, badge: null },
-    { key: 'wallet', label: 'المحفظة وVIP', icon: Coins, badge: null, memberOnly: true },
-    { key: 'settings', label: 'الإعدادات والخصوصية', icon: Settings, badge: null },
+  // Grouped Navigation Sections: Logical categories, compact spacing, unified icons
+  const NAV_SECTIONS: NavSection[] = [
+    {
+      title: 'المجتمع والتواصل',
+      items: [
+        { key: 'online', label: 'المتواجدون حالياً', icon: Users },
+        { key: 'rooms', label: 'الغرف والمجالس', icon: Compass },
+        { key: 'events', label: 'الفعاليات', icon: Calendar },
+        { key: 'news', label: 'المنشورات والأخبار', icon: Newspaper },
+      ]
+    },
+    {
+      title: 'المحادثات والعلاقات',
+      items: [
+        { key: 'messages', label: 'الرسائل', icon: MessageCircle, badge: user?.unreadMessages },
+        { key: 'friends', label: 'الأصدقاء', icon: UserPlus, badge: user?.pendingFriendRequests },
+        { key: 'stories', label: 'القصص (24h)', icon: Sparkles },
+      ]
+    },
+    {
+      title: 'المميزات والمكافآت',
+      items: [
+        { key: 'shop', label: 'متجر الشارات', icon: ShoppingBag },
+        { key: 'missions', label: 'المهام اليومية', icon: Target, memberOnly: true },
+        { key: 'levels', label: 'المستويات والشرف', icon: Trophy, memberOnly: true },
+        { key: 'games', label: 'الألعاب والمسابقات', icon: Dices },
+        { key: 'wallet', label: 'المحفظة وVIP', icon: Coins, memberOnly: true },
+      ]
+    },
+    {
+      title: 'الإعدادات والرقابة',
+      items: [
+        { key: 'settings', label: 'الإعدادات والخصوصية', icon: Settings },
+        ...(isModeratorOrAbove ? [{ key: 'admin', label: 'لوحة الإدارة والرقابة', icon: ShieldAlert, adminOnly: true }] : [])
+      ]
+    }
   ];
-
-  const NAV_ITEMS = baseNavItems.filter(item => !user?.isGuest || !item.memberOnly);
 
   return (
     <div className="min-h-screen bg-[#07090e] text-neutral-100 flex flex-col selection:bg-emerald-500/20 selection:text-emerald-300">
@@ -168,58 +199,72 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
       {/* Main Layout Body */}
       <div className="flex-1 flex max-w-[1600px] w-full mx-auto">
-        {/* Desktop Sidebar */}
-        <aside className="w-64 shrink-0 border-l border-neutral-800/80 p-4 hidden md:flex flex-col justify-between bg-[#080a10]">
-          <div className="space-y-1">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const isActive = currentTab === item.key;
+        {/* Desktop Fixed Stationary Sidebar */}
+        <aside className="w-64 shrink-0 border-l border-neutral-800/80 p-3.5 hidden md:flex flex-col justify-between bg-[#080a10] sticky top-15 sm:top-16 h-[calc(100vh-3.75rem)] sm:h-[calc(100vh-4rem)] overflow-y-auto z-30">
+          {/* Scrollable Navigation Groups */}
+          <div className="flex-1 overflow-y-auto pr-1 -mr-1 space-y-3.5">
+            {NAV_SECTIONS.map((sec, secIdx) => {
+              const visibleItems = sec.items.filter(item => !user?.isGuest || !item.memberOnly);
+              if (visibleItems.length === 0) return null;
+
               return (
-                <button
-                  key={item.key}
-                  onClick={() => onNavigate(item.key)}
-                  className={`w-full px-3.5 py-2.5 rounded-2xl flex items-center justify-between text-xs font-bold transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20'
-                      : 'text-neutral-400 hover:text-white hover:bg-neutral-900/80'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Icon className="w-4 h-4" />
-                    <span>{item.label}</span>
+                <div key={sec.title || secIdx} className="space-y-1">
+                  <div className="text-[10px] font-bold text-neutral-500 font-tajawal uppercase tracking-wider px-2.5 pb-0.5 select-none">
+                    {sec.title}
                   </div>
-                  {item.badge ? (
-                    <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
-                      {item.badge}
-                    </span>
-                  ) : null}
-                </button>
+                  <div className="space-y-0.5">
+                    {visibleItems.map(item => {
+                      const Icon = item.icon;
+                      const isActive = currentTab === item.key;
+                      return (
+                        <button
+                          key={item.key}
+                          onClick={() => onNavigate(item.key)}
+                          className={`w-full px-3 py-2 rounded-xl flex items-center justify-between text-xs font-bold transition-all cursor-pointer group active:scale-98 ${
+                            isActive
+                              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                              : 'text-neutral-400 hover:text-white hover:bg-neutral-900/80'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 truncate">
+                            <Icon
+                              className={`w-4 h-4 shrink-0 transition-colors ${
+                                isActive ? 'text-white' : 'text-neutral-400 group-hover:text-emerald-400'
+                              }`}
+                            />
+                            <span className="truncate">{item.label}</span>
+                          </div>
+
+                          {/* Unread & Action Badges */}
+                          {item.badge && item.badge > 0 ? (
+                            <span
+                              className={`min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${
+                                item.key === 'messages'
+                                  ? 'bg-emerald-500 text-neutral-950 font-black shadow-sm shadow-emerald-500/40 animate-pulse'
+                                  : 'bg-teal-600 text-white shadow-sm'
+                              }`}
+                            >
+                              {item.badge > 99 ? '+99' : item.badge}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               );
             })}
-
-            {/* Admin navigation visible ONLY to authorized roles */}
-            {isModeratorOrAbove && (
-              <button
-                onClick={() => onNavigate('admin')}
-                className={`w-full px-3.5 py-2.5 rounded-2xl flex items-center gap-3 text-xs font-bold transition-all cursor-pointer mt-3 border border-rose-900/40 ${
-                  currentTab === 'admin'
-                    ? 'bg-rose-700 text-white shadow-lg shadow-rose-700/20'
-                    : 'text-rose-400 hover:text-rose-300 hover:bg-rose-950/40'
-                }`}
-              >
-                <ShieldAlert className="w-4 h-4" />
-                <span>لوحة الإدارة والرقابة</span>
-              </button>
-            )}
           </div>
 
           {/* User info & Logout */}
-          <div className="pt-4 border-t border-neutral-900 space-y-3">
+          <div className="pt-3 mt-2 border-t border-neutral-900 space-y-2.5">
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${
-                  user?.gender === 'female' ? 'bg-rose-950 text-rose-300' : 'bg-sky-950 text-sky-300'
-                }`}>
+                <div
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${
+                    user?.gender === 'female' ? 'bg-rose-950 text-rose-300' : 'bg-sky-950 text-sky-300'
+                  }`}
+                >
                   {user?.username.slice(0, 1).toUpperCase()}
                 </div>
                 <div className="text-right">
@@ -233,7 +278,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
               <button
                 onClick={logout}
-                className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-900 cursor-pointer"
+                className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-900 cursor-pointer transition-colors"
                 title="تسجيل الخروج"
               >
                 <LogOut className="w-4 h-4" />
@@ -242,11 +287,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           </div>
         </aside>
 
-        {/* Mobile Drawer */}
+        {/* Mobile Drawer with Grouped Sections */}
         {mobileMenuOpen && (
-          <div className="fixed inset-0 z-50 md:hidden bg-black/80 backdrop-blur-sm flex flex-col justify-between p-6 animate-in fade-in">
-            <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+          <div className="fixed inset-0 z-50 md:hidden bg-black/80 backdrop-blur-sm flex flex-col justify-between p-5 animate-in fade-in">
+            <div className="space-y-3 flex-1 flex flex-col min-h-0">
+              <div className="flex items-center justify-between border-b border-neutral-800 pb-3 shrink-0">
                 <div className="flex items-center gap-2">
                   <MessageSquareHeart className="w-6 h-6 text-emerald-400" />
                   <span className="font-cairo font-bold text-lg text-white">أقسام فضفضه</span>
@@ -259,52 +304,53 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
                 </button>
               </div>
 
-              <div className="space-y-1">
-                {NAV_ITEMS.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = currentTab === item.key;
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1 -mr-1">
+                {NAV_SECTIONS.map((sec, secIdx) => {
+                  const visibleItems = sec.items.filter(item => !user?.isGuest || !item.memberOnly);
+                  if (visibleItems.length === 0) return null;
+
                   return (
-                    <button
-                      key={item.key}
-                      onClick={() => {
-                        onNavigate(item.key);
-                        setMobileMenuOpen(false);
-                      }}
-                      className={`w-full px-4 py-3 rounded-xl flex items-center justify-between text-sm font-bold cursor-pointer ${
-                        isActive ? 'bg-emerald-600 text-white' : 'text-neutral-300 hover:bg-neutral-900'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Icon className="w-5 h-5" />
-                        <span>{item.label}</span>
+                    <div key={sec.title || secIdx} className="space-y-1">
+                      <div className="text-[10px] font-bold text-neutral-500 font-tajawal uppercase tracking-wider px-2 select-none">
+                        {sec.title}
                       </div>
-                      {item.badge ? (
-                        <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-xs">
-                          {item.badge}
-                        </span>
-                      ) : null}
-                    </button>
+                      <div className="space-y-1">
+                        {visibleItems.map(item => {
+                          const Icon = item.icon;
+                          const isActive = currentTab === item.key;
+                          return (
+                            <button
+                              key={item.key}
+                              onClick={() => {
+                                onNavigate(item.key);
+                                setMobileMenuOpen(false);
+                              }}
+                              className={`w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition-all cursor-pointer ${
+                                isActive ? 'bg-emerald-600 text-white shadow-md' : 'text-neutral-300 hover:bg-neutral-900'
+                              }`}
+                            >
+                              <div className="flex items-center gap-3">
+                                <Icon className="w-4 h-4" />
+                                <span>{item.label}</span>
+                              </div>
+                              {item.badge && item.badge > 0 ? (
+                                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-neutral-950 font-black text-[10px] flex items-center justify-center animate-pulse">
+                                  {item.badge > 99 ? '+99' : item.badge}
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   );
                 })}
-
-                {isModeratorOrAbove && (
-                  <button
-                    onClick={() => {
-                      onNavigate('admin');
-                      setMobileMenuOpen(false);
-                    }}
-                    className="w-full px-4 py-3 rounded-xl flex items-center gap-3 text-sm font-bold text-rose-400 hover:bg-rose-950/40 cursor-pointer"
-                  >
-                    <ShieldAlert className="w-5 h-5" />
-                    <span>لوحة الإدارة والرقابة</span>
-                  </button>
-                )}
               </div>
             </div>
 
             <button
               onClick={logout}
-              className="w-full py-3 rounded-xl bg-neutral-900 hover:bg-rose-950 text-rose-400 font-bold text-sm border border-neutral-800 flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-3 rounded-xl bg-neutral-900 hover:bg-rose-950 text-rose-400 font-bold text-xs border border-neutral-800 flex items-center justify-center gap-2 cursor-pointer mt-3 shrink-0"
             >
               <LogOut className="w-4 h-4" />
               <span>تسجيل الخروج</span>
@@ -368,7 +414,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           }`}
         >
           <Users className="w-5 h-5" />
-          <span className="text-[10px] font-tajawal mt-0.5">المتصلون</span>
+          <span className="text-[10px] font-tajawal mt-0.5">المتواجدون</span>
         </button>
 
         <button
@@ -390,8 +436,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           <MessageCircle className="w-5 h-5" />
           <span className="text-[10px] font-tajawal mt-0.5">الرسائل</span>
           {user?.unreadMessages && user.unreadMessages > 0 ? (
-            <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-600 text-white text-[9px] flex items-center justify-center font-bold shadow-md shadow-emerald-600/50">
-              {user.unreadMessages}
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-500 text-neutral-950 text-[9px] flex items-center justify-center font-black shadow-md shadow-emerald-500/50 animate-pulse">
+              {user.unreadMessages > 99 ? '+99' : user.unreadMessages}
             </span>
           ) : null}
         </button>
@@ -405,28 +451,18 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           <UserPlus className="w-5 h-5" />
           <span className="text-[10px] font-tajawal mt-0.5">الأصدقاء</span>
           {user?.pendingFriendRequests && user.pendingFriendRequests > 0 ? (
-            <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-rose-600 text-white text-[9px] flex items-center justify-center font-bold animate-pulse shadow-md shadow-rose-600/50">
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-teal-600 text-white text-[9px] flex items-center justify-center font-bold">
               {user.pendingFriendRequests}
             </span>
           ) : null}
         </button>
 
         <button
-          onClick={() => onNavigate('wallet')}
-          className={`flex flex-col items-center justify-center min-w-[50px] py-1 cursor-pointer transition-all active:scale-90 ${
-            currentTab === 'wallet' ? 'text-amber-400 font-bold scale-105' : 'text-neutral-500 hover:text-neutral-300'
-          }`}
-        >
-          <Coins className="w-5 h-5" />
-          <span className="text-[10px] font-tajawal mt-0.5">المحفظة</span>
-        </button>
-
-        <button
           onClick={onOpenAssistant}
-          className="flex flex-col items-center justify-center min-w-[50px] py-1 text-emerald-400 hover:text-emerald-300 cursor-pointer transition-all active:scale-90"
+          className="flex flex-col items-center justify-center min-w-[50px] py-1 text-emerald-400 hover:text-emerald-300 cursor-pointer transition-transform active:scale-90"
         >
-          <Bot className="w-5 h-5 animate-pulse" />
-          <span className="text-[10px] font-tajawal mt-0.5">المساعد</span>
+          <Bot className="w-5 h-5" />
+          <span className="text-[10px] font-tajawal mt-0.5">مساعد فضفضه</span>
         </button>
       </nav>
     </div>

@@ -740,7 +740,7 @@ export const SettingsPage: React.FC = () => {
               <div className="space-y-2">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <label className="block text-xs font-bold text-neutral-300 font-tajawal">
-                    الدولة (ترتّب بها الأولوية في المتصلين)
+                    الدولة (ترتّب بها الأولوية في المتواجدين)
                   </label>
                   <button
                     type="button"

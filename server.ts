@@ -2757,6 +2757,36 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req: Request, res
   }
 });
 
+// Mark conversation as read explicitly
+app.post('/api/conversations/:id/read', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const convId = req.params.id;
+    const db = await getDb();
+
+    db.run(
+      "UPDATE private_messages SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE conversation_id = ? AND recipient_id = ? AND is_read = 0",
+      [convId, session.userId]
+    );
+    saveDb();
+
+    const remainingUnread = queryOne(
+      db,
+      "SELECT COUNT(*) as c FROM private_messages WHERE recipient_id = ? AND is_read = 0",
+      [session.userId]
+    )?.c || 0;
+
+    sendToUser(session.userId, {
+      type: 'unread_count:update',
+      unreadMessages: remainingUnread
+    });
+
+    return res.json({ success: true, unreadMessages: remainingUnread });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Send Private Message
 app.post('/api/conversations/:id/messages', requireAuth, messageSendRateLimiter, async (req: Request, res: Response) => {
   try {
