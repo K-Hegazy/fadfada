@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { X, Shield, FileText, Lock, Users, AlertTriangle } from 'lucide-react';
+import { X, Shield, FileText, Lock, Users, AlertTriangle, Flag, CheckCircle } from 'lucide-react';
 
-export type LegalTab = 'terms' | 'privacy' | 'community' | 'age18';
+export type LegalTab = 'terms' | 'privacy' | 'acceptable_use' | 'content_policy' | 'reporting' | 'age18';
 
 interface LegalModalProps {
   initialTab?: LegalTab;
@@ -21,8 +21,8 @@ export const LegalModal: React.FC<LegalModalProps> = ({ initialTab = 'terms', on
               <Shield className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm sm:text-base font-bold text-white font-cairo truncate">الوثائق والسياسات الرسمية</h2>
-              <p className="text-[10px] sm:text-xs text-neutral-400 truncate">التشريعات، حماية البيانات، وإرشادات مجتمع الأمان</p>
+              <h2 className="text-sm sm:text-base font-bold text-white font-cairo truncate">الوثائق والسياسات الرسمية لمنصة فضفضه</h2>
+              <p className="text-[10px] sm:text-xs text-neutral-400 truncate">الشروط، الخصوصية، الاستخدام المقبول، وسياسات الأمان والإشراف</p>
             </div>
           </div>
           <button
@@ -36,10 +36,12 @@ export const LegalModal: React.FC<LegalModalProps> = ({ initialTab = 'terms', on
         {/* Tab Buttons */}
         <div className="flex border-b border-neutral-800/80 bg-neutral-950/40 px-2 sm:px-3 pt-2 overflow-x-auto no-scrollbar gap-1.5 sm:gap-2 shrink-0">
           {[
-            { id: 'terms', label: 'شروط الاستخدام', icon: FileText },
+            { id: 'terms', label: 'الشروط والأحكام', icon: FileText },
             { id: 'privacy', label: 'سياسة الخصوصية', icon: Lock },
-            { id: 'community', label: 'إرشادات المجتمع', icon: Users },
-            { id: 'age18', label: 'سياسة سن الرشد (+18)', icon: AlertTriangle }
+            { id: 'acceptable_use', label: 'الاستخدام المقبول', icon: Users },
+            { id: 'content_policy', label: 'سياسة المحتوى', icon: CheckCircle },
+            { id: 'reporting', label: 'الإبلاغ والحظر', icon: Flag },
+            { id: 'age18', label: 'سن الرشد (+18)', icon: AlertTriangle }
           ].map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -61,79 +63,184 @@ export const LegalModal: React.FC<LegalModalProps> = ({ initialTab = 'terms', on
         </div>
 
         {/* Tab Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 text-neutral-300 space-y-4 text-xs leading-relaxed">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 text-neutral-300 space-y-4 text-xs leading-relaxed" dir="rtl">
+          {/* 1. TERMS & CONDITIONS */}
           {activeTab === 'terms' && (
-            <div className="space-y-4">
+            <div className="space-y-4 animate-in fade-in">
               <h3 className="text-sm font-bold text-white font-cairo flex items-center gap-2 text-emerald-400">
                 <FileText className="w-4 h-4" />
-                1. شروط واتفاقية استخدام فضفضه
+                1. اتفاقية وشروط استخدام منصة فضفضه (الإصدار 1.0)
               </h3>
               <p>
-                مرحباً بك في منصة <strong>فضفضه (Fadfada)</strong>، المنصة العربية الراقية للحوار الهادف والتواصل المجتمعي الآمن. استخدامك للمنصة أو إنشائك لحساب يعني موافقتك التامة وغير المشروطة على هذه الشروط.
+                مرحباً بك في منصة <strong>فضفضه (Fadfada)</strong>، المنصة العربية للحوار والتواصل المجتمعي الآمن. دخولك للموقع، أو إنشاؤك لحساب، أو استخدامك للخدمة كـ «زائر» أو «عضو»، يمثل موافقة صريحة وملزمة قانونياً على الالتزام بهذه الشروط والسياسات.
               </p>
-              <div className="space-y-2.5">
-                <h4 className="font-bold text-white text-xs font-cairo">أ. الأهلية والاستخدام المشروع:</h4>
-                <p>
-                  يقتصر التسجيل في منصة فضفضه على الأفراد الذين أتموا سن الثامنة عشرة (18 عاماً) فما فوق. المنصة مخصصة للتواصل الأخوي، الاجتماعي، وتفريغ المشاعر والتعبير عن الذات ضمن أطر الاحترام المتبادل.
-                </p>
-                <h4 className="font-bold text-white text-xs font-cairo">ب. مسؤولية الحساب:</h4>
-                <p>
-                  أنت مسؤول مسؤولية كاملة عن الحفاظ على سرية بيانات حسابك وكلمة المرور، وعن كافة الأنشطة والمشاركات الصادرة من حسابك.
-                </p>
-                <h4 className="font-bold text-white text-xs font-cairo">ج. حقوق الملكية الفكرية والعلامة التجارية:</h4>
-                <p>
-                  جميع العلامات التجارية، التصاميم، الأوسمة، والشفرات البرمجية ملك حصري لإدارة منصة فضفضه والمالك (Owner Hegazy). يُحظر استنساخها أو إعادة استغلالها دون إذن خطي مسبق.
-                </p>
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">أ. المسؤولية الفردية للمستخدم:</h4>
+                  <p className="text-neutral-300">
+                    يتحمل كل مستخدم أو ضيف المسؤولية القانونية والأخلاقية الكاملة والشخصية عن كل رسالة، صورة، تعليق، أو سلوك يصدر من حسابه أو جلسته. الآراء والمحتويات المنشورة تعبر عن أصحابها فقط، ولا تعبر عن رأي منصة فضفضه أو مالكها أو إدارتها بأي شكل.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">ب. أهلية التسجيل وسن الرشد (+18):</h4>
+                  <p className="text-neutral-300">
+                    المنصة مخصصة حصراً للأفراد الذين أتموا سن الثامنة عشرة (18 عاماً) فما فوق. يحظر تماماً تسجيل القاصرين، ويحق للإدارة تعليق أو حذف أي حساب يخالف شرط السن القانوني فوراً.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">ج. صلاحيات الإدارة والإشراف:</h4>
+                  <p className="text-neutral-300">
+                    تمتلك إدارة فضفضه ومشرفوها الحق الكامل في إزالة أو حجب أي محتوى مخالف، وتعليق الحسابات أو فرض حظر مؤقت أو دائم دون إشعار مسبق متى ثبت ارتكاب انتهاك للشروط أو إضرار بسلامة الأعضاء.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">د. المعاملات والعملات الافتراضية (Coins):</h4>
+                  <p className="text-neutral-300">
+                    الكوينز والمكافآت داخل المنصة هي عملات افتراضية مخصصة للميزات الترفيهية والتفاعلية داخل فضفضه فقط، ولا تمثل نقداً مصرفياً أو أداة دفع مالية خارجية.
+                  </p>
+                </div>
               </div>
             </div>
           )}
 
+          {/* 2. PRIVACY POLICY */}
           {activeTab === 'privacy' && (
-            <div className="space-y-4">
+            <div className="space-y-4 animate-in fade-in">
               <h3 className="text-sm font-bold text-white font-cairo flex items-center gap-2 text-emerald-400">
                 <Lock className="w-4 h-4" />
-                2. سياسة الخصوصية وحماية البيانات
+                2. سياسة الخصوصية وحماية سرية البيانات
               </h3>
               <p>
-                نولي في فضفضه خصوصيتك وأمان بياناتك أعلى درجات الأهمية والمسؤولية التقنية.
+                تلتزم فضفضه بأعلى معايير الأمان لحماية بيانات المستخدمين وخصوصيتهم الشخصية:
               </p>
-              <div className="space-y-2.5">
-                <h4 className="font-bold text-white text-xs font-cairo">أ. التشفير والحماية:</h4>
-                <p>
-                  يتم تشفير كلمات المرور باستخدام خوارزميات التجزئة المشفرة المتقدمة (Scrypt + Salt عشوائي). لا يتم تخزين كلمات المرور كنص صريح بأي شكل من الأشكال.
-                </p>
-                <h4 className="font-bold text-white text-xs font-cairo">ب. الرسائل ذاتية التدمير والعرض لمرة واحدة (View Once):</h4>
-                <p>
-                  تخضع وسائط العرض لمرة واحدة لتدمير برمجي فوري على الخادم عقب فتحها من قِبل المستلم، وتصبح غير قابلة للاسترجاع حتى عبر الرابط المباشر.
-                </p>
-                <h4 className="font-bold text-white text-xs font-cairo">ج. أدوات التحكم بالخصوصية:</h4>
-                <p>
-                  نوفر لك في قسم الإعدادات تحكماً دقيقاً يفرض حماية من جانب الخادم (Server-Side) لتحديد: من يمكنه مراسلتك، من يرى قصصك، ومن يطّلع على حالة اتصالك.
-                </p>
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">أ. تشفير كلمات المرور وتأمين الحسابات:</h4>
+                  <p className="text-neutral-300">
+                    يتم تخزين كلمات المرور حصرياً عبر تشفير متقدم متبوع بـ Salt عشوائي فريد لكل مستخدم، بما يمنع أي اطلاع عليها حتى من قِبل الفريق التقني.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">ب. الصور ذاتية التدمير والعرض لمرة واحدة:</h4>
+                  <p className="text-neutral-300">
+                    تخضع وسائط «العرض لمرة واحدة» (View Once) للتدمير الآلي الفوري على الخادم عقب فتحها مباشرة، دون ترك نسخ احتياطية.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">ج. عدم بيع أو تسريب البيانات:</h4>
+                  <p className="text-neutral-300">
+                    لا تقوم فضفضه ببيع أو تأجير أي بيانات شخصية أو سجلات اتصال لأي طرف ثالث، وتقتصر معالجة البيانات على تشغيل وتحسين خدمات التواصل والأمان.
+                  </p>
+                </div>
               </div>
             </div>
           )}
 
-          {activeTab === 'community' && (
-            <div className="space-y-4">
+          {/* 3. ACCEPTABLE USE POLICY */}
+          {activeTab === 'acceptable_use' && (
+            <div className="space-y-4 animate-in fade-in">
               <h3 className="text-sm font-bold text-white font-cairo flex items-center gap-2 text-emerald-400">
                 <Users className="w-4 h-4" />
-                3. ميثاق الشرف وإرشادات المجتمع
+                3. سياسة الاستخدام المقبول (Acceptable Use Policy)
               </h3>
               <p>
-                صُممت فضفضه لتكون ملاذاً آمناً لكل من يبحث عن الاستماع، الود، والنقاش الهادئ. نطبق سياسة صارمة ضد التجاوزات:
+                للحفاظ على المنصة كمساحة حوارية راقية وآمنة للجميع، يلتزم كل مستخدم بعدم إساءة استخدام المنصة.
               </p>
-              <ul className="list-disc list-inside space-y-1.5 text-neutral-300">
-                <li><strong className="text-white">الاحترام غير المشروط:</strong> يُمنع تماماً أي سباب، شتائم، تنمر، أو تشهير بأي عضو.</li>
-                <li><strong className="text-white">منع التحرش والمضايقات:</strong> احترام رغبة الطرف الآخر عند إنهاء المحادثة أو استخدام أدوات الكتم والحظر.</li>
-                <li><strong className="text-white">حظر الروابط المشبوهة والاحتيال:</strong> يُمنع منعاً باتاً نشر روابط اختراق، إعلانات مزعجة (Spam)، أو ترويج خدمات احتيالية.</li>
-                <li><strong className="text-white">المحتوى اللائق:</strong> يمنع نشر أي صور، وسائط، أو نصوص مخلة بالآداب العامة أو خادشة للحياء.</li>
-              </ul>
+              <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-800/40 text-rose-200 space-y-2">
+                <h4 className="font-bold text-xs text-rose-300 font-cairo">الأفعال والأنشطة المحظورة حظراً قاطعاً:</h4>
+                <ul className="list-disc list-inside space-y-1 text-neutral-300 text-[11px]">
+                  <li>ارتكاب أو التحريض على أي نشاط مخالف للقانون المعمول به.</li>
+                  <li>التهديد، الابتزاز، القذف، التشهير، أو التحرش اللفظي أو الجنسي.</li>
+                  <li>انتحال صفة أشخاص آخرين أو مؤسسات أو ادعاء صفة إشرافية غير صحيحة.</li>
+                  <li>محاولات الاحتيال المالي، الاستغلال، أو طلب معلومات بنكية أو كلمات مرور.</li>
+                  <li>نشر البرمجيات الخبيثة، فيروسات، روابط التصيد (Phishing)، أو الإعلانات المزعجة (Spam).</li>
+                  <li>استغلال الثغرات البرمجية أو التلاعب بالأرصدة والعدادات والعملات الافتراضية.</li>
+                </ul>
+              </div>
             </div>
           )}
 
+          {/* 4. CONTENT POLICY */}
+          {activeTab === 'content_policy' && (
+            <div className="space-y-4 animate-in fade-in">
+              <h3 className="text-sm font-bold text-white font-cairo flex items-center gap-2 text-emerald-400">
+                <CheckCircle className="w-4 h-4" />
+                4. سياسة المحتوى والحرية المسؤولة
+              </h3>
+              <p>
+                تؤمن فضفضه بأهمية الحوار وتبادل وجهات النظر، مع الالتزام بالقواعد الآتية:
+              </p>
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">أ. النقاشات الدينية والفكرية والسياسية:</h4>
+                  <p className="text-neutral-300">
+                    لا يُمنع المحتوى الديني أو الفكري أو السياسي لمجرد كونه سياسياً أو دينياً، ويحق للأعضاء تبادل الرأي بأسلوب مهذب ومحترم. غير أنه <strong>يُمنع منعاً باتاً</strong> أي محتوى يحرض على العنف أو الإرهاب، أو يبث الكراهية والتعصب الطائفي، أو يمس المقدسات بازدراء، أو يحرض على ارتكاب الجرائم.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">ب. الآداب العامة والوسائط الإباحية:</h4>
+                  <p className="text-neutral-300">
+                    يُمنع قطعياً نشر أو تداول أي وسائط أو صور إباحية أو خادشة للحياء في العام أو الخاص أو القصص. يتم حظر هذه المواد آلياً وإغلاق حساب مرسلها فوراً.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800">
+                  <h4 className="font-bold text-white text-xs font-cairo mb-1 text-emerald-300">ج. حقوق المشرفين في المراجعة:</h4>
+                  <p className="text-neutral-300">
+                    يملك المشرفون سلطة مراجعة البلاغات وإزالة أي محتوى يخل بسلامة المجتمع دون مسؤولية تعويض عن إزالة المحتوى المخالف.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 5. REPORTING & SAFETY */}
+          {activeTab === 'reporting' && (
+            <div className="space-y-4 animate-in fade-in">
+              <h3 className="text-sm font-bold text-white font-cairo flex items-center gap-2 text-emerald-400">
+                <Flag className="w-4 h-4" />
+                5. نظام الإبلاغ عن الانتهاكات وأدوات الحظر
+              </h3>
+              <p>
+                وفرت فضفضه منظومة متكاملة لحماية تجربتك تضمن لك السيطرة الكاملة على من تتفاعل معه:
+              </p>
+              <div className="space-y-2.5">
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800 flex items-start gap-2.5">
+                  <Flag className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-white block font-cairo text-xs">زر الإبلاغ الفوري (Report):</strong>
+                    <span className="text-neutral-300 text-[11px]">متاح في جميع المحادثات والغرف والقصص وقسم التواصل العشوائي لرفع بلاغ مباشر يصل لفريق الإشراف.</span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800 flex items-start gap-2.5">
+                  <Shield className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-white block font-cairo text-xs">الحظر الشخصي (Block):</strong>
+                    <span className="text-neutral-300 text-[11px]">بمجرد حظرك لأي مستخدم، يُمنع من مراسلتك أو رؤية حالتك أو مطابقته معك مجدداً في التواصل العشوائي.</span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800 flex items-start gap-2.5">
+                  <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-white block font-cairo text-xs">المعالجة السريعة:</strong>
+                    <span className="text-neutral-300 text-[11px]">يتم اتخاذ إجراءات تصاعدية تشمل: التحذير، تقييد المراسلة، التعليق المؤقت، أو الحظر النهائي للجهاز والحساب.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 6. AGE 18+ POLICY */}
           {activeTab === 'age18' && (
-            <div className="space-y-4">
+            <div className="space-y-4 animate-in fade-in">
               <div className="p-4 rounded-2xl bg-amber-950/60 border border-amber-600/40 text-amber-200 flex items-start gap-3">
                 <AlertTriangle className="w-6 h-6 text-amber-400 shrink-0 mt-0.5" />
                 <div>
@@ -157,13 +264,13 @@ export const LegalModal: React.FC<LegalModalProps> = ({ initialTab = 'terms', on
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-neutral-800 bg-neutral-900/60 flex items-center justify-between">
+        <div className="p-3.5 sm:p-4 border-t border-neutral-800 bg-neutral-900/60 flex items-center justify-between">
           <span className="text-[11px] text-neutral-500 font-tajawal">
             منصة فضفضه © {new Date().getFullYear()} - جميع الحقوق محفوظة
           </span>
           <button
             onClick={onClose}
-            className="py-2.5 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
+            className="py-2 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
           >
             إغلاق وقبول السياسات
           </button>

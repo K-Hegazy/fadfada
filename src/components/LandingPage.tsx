@@ -83,6 +83,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
   const [guestGender, setGuestGender] = useState<'female' | 'male'>('female');
   const [guestCountry, setGuestCountry] = useState('مصر');
   const [guestAge18Confirmed, setGuestAge18Confirmed] = useState<boolean>(false);
+  const [regTermsAgreed, setRegTermsAgreed] = useState<boolean>(false);
+  const [guestTermsAgreed, setGuestTermsAgreed] = useState<boolean>(false);
   const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
 
   // Automatic Server-Side Country Detection
@@ -267,6 +269,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
       return;
     }
 
+    if (!regTermsAgreed) {
+      setError('يجب الموافقة الإلزامية على الشروط والأحكام وسياسة الخصوصية وسياسة الاستخدام المقبول لمنصة فضفضه.');
+      return;
+    }
+
     setLoading(true);
     try {
       await register({
@@ -278,7 +285,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
         country: regCountry,
         isManualCountry: isManualCountryReg,
         bio: regBio,
-        ownerKey: regOwnerKey
+        ownerKey: regOwnerKey,
+        termsAgreed: true
       });
       setModalMode('none');
       onSuccess();
@@ -292,7 +300,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
   const handleGuestSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!guestAge18Confirmed) {
-      setError('يجب تأكيد أن عمرك 18 عاماً فما فوق والموافقة على إرشادات المنصة للدخول كزائر.');
+      setError('يجب تأكيد أن عمرك 18 عاماً فما فوق للدخول كزائر.');
+      return;
+    }
+    if (!guestTermsAgreed) {
+      setError('يجب الموافقة الإلزامية على الشروط والأحكام وسياسة الخصوصية وسياسة الاستخدام المقبول لمنصة فضفضه.');
       return;
     }
     setError('');
@@ -302,7 +314,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
         guestNickname || 'زائر فضفضه',
         guestGender,
         guestCountry,
-        isManualCountryGuest
+        isManualCountryGuest,
+        true
       );
       setModalMode('none');
       onSuccess();
@@ -455,13 +468,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
             <span>Fadfada Platform © {new Date().getFullYear()}</span>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-neutral-400">
+          <div className="flex flex-wrap items-center justify-center gap-2.5 sm:gap-3 text-xs text-neutral-400">
             <button
               type="button"
               onClick={() => setLegalTab('terms')}
               className="hover:text-emerald-400 transition-colors cursor-pointer"
             >
-              شروط الاستخدام
+              الشروط والأحكام
             </button>
             <span>•</span>
             <button
@@ -474,10 +487,26 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
             <span>•</span>
             <button
               type="button"
-              onClick={() => setLegalTab('community')}
+              onClick={() => setLegalTab('acceptable_use')}
               className="hover:text-emerald-400 transition-colors cursor-pointer"
             >
-              إرشادات المجتمع
+              الاستخدام المقبول
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={() => setLegalTab('content_policy')}
+              className="hover:text-emerald-400 transition-colors cursor-pointer"
+            >
+              سياسة المحتوى
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={() => setLegalTab('reporting')}
+              className="hover:text-emerald-400 transition-colors cursor-pointer"
+            >
+              الإبلاغ والحظر
             </button>
             <span>•</span>
             <button
@@ -486,7 +515,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
               className="hover:text-amber-400 transition-colors cursor-pointer flex items-center gap-1"
             >
               <span className="px-1 py-0.5 bg-amber-950 text-amber-300 rounded border border-amber-800/60 text-[9px] font-bold">18+</span>
-              سياسة الفئات العمرية
+              الفئات العمرية
             </button>
           </div>
 
@@ -1027,9 +1056,48 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                   />
                 </div>
 
+                {/* Mandatory Terms & Policies Checkbox */}
+                <div className="p-3.5 rounded-2xl bg-neutral-900/90 border border-neutral-800 flex items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    id="regTermsConsentCheck"
+                    required
+                    checked={regTermsAgreed}
+                    onChange={(e) => setRegTermsAgreed(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded accent-emerald-500 cursor-pointer shrink-0"
+                  />
+                  <label htmlFor="regTermsConsentCheck" className="text-xs text-neutral-300 leading-relaxed font-tajawal cursor-pointer select-none">
+                    أوافق على{' '}
+                    <button
+                      type="button"
+                      onClick={() => setLegalTab('terms')}
+                      className="text-emerald-400 underline hover:text-emerald-300 font-semibold cursor-pointer"
+                    >
+                      الشروط والأحكام
+                    </button>{' '}
+                    و{' '}
+                    <button
+                      type="button"
+                      onClick={() => setLegalTab('privacy')}
+                      className="text-emerald-400 underline hover:text-emerald-300 font-semibold cursor-pointer"
+                    >
+                      سياسة الخصوصية
+                    </button>{' '}
+                    و{' '}
+                    <button
+                      type="button"
+                      onClick={() => setLegalTab('acceptable_use')}
+                      className="text-emerald-400 underline hover:text-emerald-300 font-semibold cursor-pointer"
+                    >
+                      سياسة الاستخدام المقبول
+                    </button>{' '}
+                    لمنصة فضفضه.
+                  </label>
+                </div>
+
                 <button
                   type="submit"
-                  disabled={loading || currentAge < 18}
+                  disabled={loading || currentAge < 18 || !regTermsAgreed}
                   className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? 'جاري إنشاء الحساب...' : 'إتمام التسجيل والدخول للمتصلين الآن'}
@@ -1180,13 +1248,52 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                     className="mt-1 w-4 h-4 rounded accent-teal-500 cursor-pointer shrink-0"
                   />
                   <label htmlFor="guestAge18Check" className="text-xs text-neutral-300 leading-relaxed font-tajawal cursor-pointer select-none">
-                    أقر وأتعهد بأن عمري <strong className="text-white">18 عاماً فما فوق</strong>، وأوافق على التزام الآداب العامة وإرشادات مجتمع فضفضه وشروط الاستخدام.
+                    أقر وأتعهد بأن عمري <strong className="text-white">18 عاماً فما فوق</strong>، وأتحمل المسؤولية الشخصية عن كافة أفعالي داخل المنصة.
+                  </label>
+                </div>
+
+                {/* Mandatory Terms & Policies Checkbox for Guest */}
+                <div className="p-3.5 rounded-2xl bg-neutral-900/90 border border-neutral-800 flex items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    id="guestTermsConsentCheck"
+                    required
+                    checked={guestTermsAgreed}
+                    onChange={(e) => setGuestTermsAgreed(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded accent-teal-500 cursor-pointer shrink-0"
+                  />
+                  <label htmlFor="guestTermsConsentCheck" className="text-xs text-neutral-300 leading-relaxed font-tajawal cursor-pointer select-none">
+                    أوافق على{' '}
+                    <button
+                      type="button"
+                      onClick={() => setLegalTab('terms')}
+                      className="text-teal-400 underline hover:text-teal-300 font-semibold cursor-pointer"
+                    >
+                      الشروط والأحكام
+                    </button>{' '}
+                    و{' '}
+                    <button
+                      type="button"
+                      onClick={() => setLegalTab('privacy')}
+                      className="text-teal-400 underline hover:text-teal-300 font-semibold cursor-pointer"
+                    >
+                      سياسة الخصوصية
+                    </button>{' '}
+                    و{' '}
+                    <button
+                      type="button"
+                      onClick={() => setLegalTab('acceptable_use')}
+                      className="text-teal-400 underline hover:text-teal-300 font-semibold cursor-pointer"
+                    >
+                      سياسة الاستخدام المقبول
+                    </button>{' '}
+                    لمنصة فضفضه.
                   </label>
                 </div>
 
                 <button
                   type="submit"
-                  disabled={loading || !guestAge18Confirmed}
+                  disabled={loading || !guestAge18Confirmed || !guestTermsAgreed}
                   className="w-full py-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-sm shadow-lg shadow-teal-600/20 transition-all cursor-pointer disabled:opacity-50"
                 >
                   {loading ? 'جاري تجهيز جلسة الزائر...' : 'دخول فوري إلى المتواجدين حالياً'}

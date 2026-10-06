@@ -487,6 +487,22 @@ wss.on('close', () => {
   clearInterval(heartbeatInterval);
 });
 
+// Random Chat Matchmaking Waiters Queue
+export interface RandomChatWaiter {
+  userId: string;
+  username: string;
+  gender: string;
+  country: string;
+  interests: string[];
+  type: 'text' | 'voice' | 'video';
+  targetGender: string;
+  targetCountry: string;
+  targetInterests: string[];
+  queuedAt: number;
+}
+
+const randomChatWaiters = new Map<string, RandomChatWaiter>();
+
 // WebSocket Connection handler
 wss.on('connection', async (ws: WebSocket, req: http.IncomingMessage) => {
   (ws as any).isAlive = true;
@@ -715,6 +731,43 @@ function touchUserActivity(db: any, userId: string) {
         for (const client of wss.clients) {
           if (client.readyState === WebSocket.OPEN) client.send(reactionPayload);
         }
+      } else if (msg.type === 'random_chat:signal') {
+        if (msg.targetUserId) {
+          sendToUser(msg.targetUserId, {
+            type: 'random_chat:signal',
+            fromUserId: user.userId,
+            signal: msg.signal,
+            sessionId: msg.sessionId
+          });
+        }
+      } else if (msg.type === 'random_chat:message') {
+        if (msg.targetUserId) {
+          sendToUser(msg.targetUserId, {
+            type: 'random_chat:message',
+            fromUserId: user.userId,
+            text: msg.text,
+            sessionId: msg.sessionId,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } else if (msg.type === 'random_chat:typing') {
+        if (msg.targetUserId) {
+          sendToUser(msg.targetUserId, {
+            type: 'random_chat:typing',
+            fromUserId: user.userId,
+            isTyping: !!msg.isTyping,
+            sessionId: msg.sessionId
+          });
+        }
+      } else if (msg.type === 'random_chat:ended') {
+        if (msg.targetUserId) {
+          sendToUser(msg.targetUserId, {
+            type: 'random_chat:ended',
+            fromUserId: user.userId,
+            sessionId: msg.sessionId,
+            reason: msg.reason || 'partner_ended'
+          });
+        }
       }
     } catch (e) {
       console.error('WS message error:', e);
@@ -723,6 +776,7 @@ function touchUserActivity(db: any, userId: string) {
 
   ws.on('close', () => {
     socketUserMap.delete(ws);
+    randomChatWaiters.delete(user.userId);
     // Remove user from any audio rooms on disconnect
     db.run("DELETE FROM active_audio_speakers WHERE user_id = ?", [user.userId]);
 
@@ -788,11 +842,19 @@ app.post('/api/auth/register', registerRateLimiter, async (req: Request, res: Re
       bio,
       interests,
       ownerKey,
-      isManualCountry
+      isManualCountry,
+      termsAgreed
     } = req.body;
 
     if (!username || !email || !password || !dateOfBirth || !gender) {
       return res.status(400).json({ error: 'يرجى استكمال جميع البيانات المطلوبة بما فيها البريد الإلكتروني' });
+    }
+
+    // MANDATORY TERMS & CONDITIONS CONSENT (Server-Side Verification)
+    if (termsAgreed !== true && termsAgreed !== 'true' && termsAgreed !== 1) {
+      return res.status(400).json({
+        error: 'يجب الموافقة الإلزامية على الشروط والأحكام وسياسة الخصوصية وسياسة الاستخدام المقبول لمنصة فضفضه.'
+      });
     }
 
     // Clean and validate email
@@ -883,6 +945,17 @@ app.post('/api/auth/register', registerRateLimiter, async (req: Request, res: Re
         db.run("INSERT OR IGNORE INTO user_interests (user_id, interest) VALUES (?, ?)", [userId, item]);
       }
     }
+
+    // Record mandatory legal consent
+    const termsId = 'trm_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    const clientIp = ((req.headers['x-forwarded-for'] as string) || req.ip || '').split(',')[0].trim();
+    const userAgent = (req.headers['user-agent'] as string) || '';
+    db.run(
+      `INSERT INTO terms_agreements (id, user_id, guest_session_id, is_guest, agreed_at, terms_version, ip_address, user_agent)
+       VALUES (?, ?, '', 0, CURRENT_TIMESTAMP, '1.0', ?, ?)`,
+      [termsId, userId, clientIp, userAgent]
+    );
+    db.run("UPDATE users SET terms_agreed = 1, terms_agreed_at = CURRENT_TIMESTAMP, terms_version = '1.0' WHERE id = ?", [userId]);
 
     // Create session token
     const token = createSession(db, userId);
@@ -1300,7 +1373,15 @@ app.put('/api/users/me/settings/sound', requireAuth, async (req: Request, res: R
 // Guest Entry
 app.post('/api/auth/guest', async (req: Request, res: Response) => {
   try {
-    const { nickname, gender, country, isManualCountry } = req.body;
+    const { nickname, gender, country, isManualCountry, termsAgreed } = req.body;
+
+    // MANDATORY TERMS & CONDITIONS CONSENT (Server-Side Verification)
+    if (termsAgreed !== true && termsAgreed !== 'true' && termsAgreed !== 1) {
+      return res.status(400).json({
+        error: 'يجب الموافقة الإلزامية على الشروط والأحكام وسياسة الاستخدام المقبول للدخول كضيف.'
+      });
+    }
+
     const cleanNick = (nickname || 'زائر').trim();
     const cleanGender = gender === 'female' ? 'female' : 'male';
 
@@ -1346,6 +1427,16 @@ app.post('/api/auth/guest', async (req: Request, res: Response) => {
     );
 
     const token = createSession(db, guestId);
+
+    // Record mandatory legal consent for guest session
+    const termsId = 'trm_gst_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    const clientIp = ((req.headers['x-forwarded-for'] as string) || req.ip || '').split(',')[0].trim();
+    const userAgent = (req.headers['user-agent'] as string) || '';
+    db.run(
+      `INSERT INTO terms_agreements (id, user_id, guest_session_id, is_guest, agreed_at, terms_version, ip_address, user_agent)
+       VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, '1.0', ?, ?)`,
+      [termsId, guestId, token, clientIp, userAgent]
+    );
 
     return res.json({
       success: true,
@@ -4002,6 +4093,116 @@ app.post('/api/vip/purchase', requireAuth, async (req: Request, res: Response) =
   }
 });
 
+// Games: Entry fee (Coin Deduction for games like Tic-Tac-Toe, Quiz, Wheel)
+app.post('/api/games/entry', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { game, stake } = req.body;
+    const cost = Math.max(1, Number(stake) || 20);
+
+    const db = await getDb();
+    const userRow = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
+    if (!userRow || userRow.coins < cost) {
+      return res.status(400).json({ error: `رصيد الكوينز غير كافٍ. تحتاج إلى ${cost} كوينز للمشاركة.` });
+    }
+
+    db.run("UPDATE users SET coins = coins - ? WHERE id = ?", [cost, session.userId]);
+    const txId = 'tx_' + Math.random().toString(36).substring(2, 9);
+    const gameLabel = game === 'tictactoe' ? 'X & O (تيك تاك تو)' : game === 'quiz' ? 'مسابقة الأمثال' : 'لعبة ترفيهية';
+    db.run(
+      "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'game_entry', ?)",
+      [txId, session.userId, -cost, `رسوم مشاركة في لعبة ${gameLabel}`]
+    );
+    saveDb();
+
+    return res.json({ success: true, remainingCoins: userRow.coins - cost });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في خصم رسوم اللعبة' });
+  }
+});
+
+// Games: Winning Reward (Coin Addition)
+app.post('/api/games/win', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { game, amount } = req.body;
+    const reward = Math.max(1, Math.min(1000, Number(amount) || 40));
+
+    const db = await getDb();
+    db.run("UPDATE users SET coins = coins + ? WHERE id = ?", [reward, session.userId]);
+    addXp(db, session.userId, Math.round(reward / 2));
+    trackMissionAction(db, session.userId, 'game', 1);
+
+    const txId = 'tx_' + Math.random().toString(36).substring(2, 9);
+    const gameLabel = game === 'tictactoe' ? 'الفوز في لعبة X & O' : 'الفوز في اللعبة';
+    db.run(
+      "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'game_win', ?)",
+      [txId, session.userId, reward, `جائزة ${gameLabel}`]
+    );
+    saveDb();
+
+    return res.json({ success: true, reward });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في إضافة جائزة الفوز' });
+  }
+});
+
+// Games: Spin Wheel (Cost in coins and win prizes)
+app.post('/api/games/spin-wheel', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const cost = Math.max(1, Number(req.body.cost) || 20);
+
+    const db = await getDb();
+    const userRow = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
+    if (!userRow || userRow.coins < cost) {
+      return res.status(400).json({ error: `رصيد الكوينز غير كافٍ. تحتاج إلى ${cost} كوينز لتدوير العجلة.` });
+    }
+
+    // Deduct entry fee
+    db.run("UPDATE users SET coins = coins - ? WHERE id = ?", [cost, session.userId]);
+    const deductTxId = 'tx_' + Math.random().toString(36).substring(2, 9);
+    db.run(
+      "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'game_entry', 'رسوم تدوير عجلة الحظ')",
+      [deductTxId, session.userId, -cost]
+    );
+
+    // Pick reward
+    const wheelPrizes = [
+      { prize: '25 كوينز', coins: 25, xp: 10 },
+      { prize: '40 كوينز', coins: 40, xp: 15 },
+      { prize: '60 كوينز', coins: 60, xp: 20 },
+      { prize: '100 كوينز كبرى! 🌟', coins: 100, xp: 50 },
+      { prize: '75 XP خبرة', coins: 10, xp: 75 },
+      { prize: '30 كوينز', coins: 30, xp: 10 }
+    ];
+    const chosen = wheelPrizes[Math.floor(Math.random() * wheelPrizes.length)];
+
+    if (chosen.coins > 0) {
+      db.run("UPDATE users SET coins = coins + ? WHERE id = ?", [chosen.coins, session.userId]);
+      const winTxId = 'tx_' + Math.random().toString(36).substring(2, 9);
+      db.run(
+        "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'lucky_wheel', ?)",
+        [winTxId, session.userId, chosen.coins, `جائزة عجلة الحظ: ${chosen.prize}`]
+      );
+    }
+    if (chosen.xp > 0) {
+      addXp(db, session.userId, chosen.xp);
+    }
+    trackMissionAction(db, session.userId, 'game', 1);
+
+    saveDb();
+    return res.json({
+      success: true,
+      prize: chosen.prize,
+      coinsEarned: chosen.coins,
+      xpEarned: chosen.xp
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في تشغيل عجلة الحظ' });
+  }
+});
+
 // Games: Daily Lucky Wheel Spin (Server-Authoritative Cooldown & Rewards)
 app.post('/api/games/lucky-wheel', requireAuth, async (req: Request, res: Response) => {
   try {
@@ -4218,6 +4419,441 @@ app.post('/api/games/truth-or-dare/complete', requireAuth, gameActionRateLimiter
     });
   } catch (err) {
     return res.status(500).json({ error: 'خطأ في حفظ نتيجة التحدي' });
+  }
+});
+
+// ==========================================
+// 8.5. RANDOM CHAT ("تواصل عشوائي") & STORY ADS
+// ==========================================
+
+// Helper to get random settings
+function getRandomSettings(db: any) {
+  const rows = queryAll(db, "SELECT key, value FROM random_settings");
+  const settings: Record<string, any> = {
+    price_chat_per_min: 1,
+    price_voice_per_min: 3,
+    price_video_per_min: 5,
+    free_attempts: 4,
+    free_minutes_per_session: 5
+  };
+  for (const r of rows) {
+    settings[r.key] = Number(r.value) || r.value;
+  }
+  return settings;
+}
+
+// Helper to count user's used free sessions
+function getUserFreeSessionsUsed(db: any, userId: string): number {
+  const row = queryOne(
+    db,
+    "SELECT COUNT(*) as c FROM random_sessions WHERE (user1_id = ? OR user2_id = ?) AND is_free = 1",
+    [userId, userId]
+  );
+  return Number(row?.c || 0);
+}
+
+// 1. Random Chat Status & User Limits
+app.get('/api/random-chat/status', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const db = await getDb();
+    const settings = getRandomSettings(db);
+    const used = getUserFreeSessionsUsed(db, session.userId);
+    const freeRemaining = Math.max(0, settings.free_attempts - used);
+
+    // Check active session if any
+    const active = queryOne(
+      db,
+      "SELECT * FROM random_sessions WHERE (user1_id = ? OR user2_id = ?) AND status = 'active' ORDER BY started_at DESC LIMIT 1",
+      [session.userId, session.userId]
+    );
+
+    let activeSessionData = null;
+    if (active) {
+      const partnerId = active.user1_id === session.userId ? active.user2_id : active.user1_id;
+      const partner = queryOne(db, "SELECT id, username, gender, country, avatar_url, level, bio FROM users WHERE id = ?", [partnerId]);
+      const partnerInterests = queryAll(db, "SELECT interest FROM user_interests WHERE user_id = ?", [partnerId]).map((r: any) => r.interest);
+      const elapsedSeconds = Math.round((Date.now() - new Date(active.started_at).getTime()) / 1000);
+
+      activeSessionData = {
+        sessionId: active.id,
+        partner: {
+          id: partner?.id,
+          username: partner?.username,
+          gender: partner?.gender,
+          country: partner?.country,
+          avatarUrl: partner?.avatar_url,
+          level: partner?.level,
+          bio: partner?.bio,
+          interests: partnerInterests
+        },
+        type: active.type,
+        isFree: active.is_free === 1,
+        startedAt: active.started_at,
+        elapsedSeconds,
+        freeDurationSeconds: settings.free_minutes_per_session * 60
+      };
+    }
+
+    const userRow = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
+
+    return res.json({
+      success: true,
+      freeSessionsRemaining: freeRemaining,
+      freeSessionsLimit: settings.free_attempts,
+      freeMinutesPerSession: settings.free_minutes_per_session,
+      prices: {
+        text: settings.price_chat_per_min,
+        voice: settings.price_voice_per_min,
+        video: settings.price_video_per_min
+      },
+      userCoins: userRow?.coins || 0,
+      activeSession: activeSessionData
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في جلب بيانات التواصل العشوائي' });
+  }
+});
+
+// 2. Start Search & Matchmaking
+app.post('/api/random-chat/search', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { type = 'text', targetGender = 'all', targetCountry = 'all', targetInterests = [] } = req.body;
+    const db = await getDb();
+    const settings = getRandomSettings(db);
+    const userRow = queryOne(db, "SELECT id, username, gender, country, avatar_url, level, coins FROM users WHERE id = ?", [session.userId]);
+    if (!userRow) return res.status(404).json({ error: 'المستخدم غير موجود' });
+
+    const used = getUserFreeSessionsUsed(db, session.userId);
+    const freeRemaining = Math.max(0, settings.free_attempts - used);
+
+    const priceMap: Record<string, number> = {
+      text: settings.price_chat_per_min || 1,
+      voice: settings.price_voice_per_min || 3,
+      video: settings.price_video_per_min || 5
+    };
+    const minRequiredCoins = priceMap[type] || 1;
+
+    if (freeRemaining === 0 && (userRow.coins || 0) < minRequiredCoins) {
+      return res.status(400).json({
+        error: `لقد استنفدت جلساتك المجانية الـ ${settings.free_attempts}. تحتاج إلى ${minRequiredCoins} كوينز على الأقل لبدء جلسة جديدة.`,
+        requiresCoins: true
+      });
+    }
+
+    // Close any previous active sessions
+    db.run("UPDATE random_sessions SET status = 'ended', ended_at = CURRENT_TIMESTAMP WHERE (user1_id = ? OR user2_id = ?) AND status = 'active'", [session.userId, session.userId]);
+    saveDb();
+
+    const userInterests = queryAll(db, "SELECT interest FROM user_interests WHERE user_id = ?", [session.userId]).map((r: any) => r.interest);
+
+    // Search queue
+    let matchedCandidate: RandomChatWaiter | null = null;
+    const now = Date.now();
+
+    for (const [waiterId, waiter] of randomChatWaiters.entries()) {
+      if (waiter.userId === session.userId) continue;
+      if (waiter.type !== type) continue;
+
+      if (now - waiter.queuedAt > 60000) {
+        randomChatWaiters.delete(waiterId);
+        continue;
+      }
+
+      const waiterSockets = connectedSockets.get(waiter.userId);
+      if (!waiterSockets || waiterSockets.size === 0) {
+        randomChatWaiters.delete(waiterId);
+        continue;
+      }
+
+      const blockCheck = queryOne(
+        db,
+        "SELECT 1 FROM blocks WHERE (user_id = ? AND blocked_user_id = ?) OR (user_id = ? AND blocked_user_id = ?)",
+        [session.userId, waiter.userId, waiter.userId, session.userId]
+      );
+      if (blockCheck) continue;
+
+      if (targetGender !== 'all' && waiter.gender !== targetGender) continue;
+      if (waiter.targetGender !== 'all' && userRow.gender !== waiter.targetGender) continue;
+
+      if (targetCountry !== 'all' && waiter.country !== targetCountry) continue;
+      if (waiter.targetCountry !== 'all' && userRow.country !== waiter.targetCountry) continue;
+
+      matchedCandidate = waiter;
+      randomChatWaiters.delete(waiterId);
+      break;
+    }
+
+    if (matchedCandidate) {
+      const sessionId = 'rs_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      const candidateUsed = getUserFreeSessionsUsed(db, matchedCandidate.userId);
+      const candidateFreeRemaining = Math.max(0, settings.free_attempts - candidateUsed);
+      const isFree = freeRemaining > 0 && candidateFreeRemaining > 0 ? 1 : 0;
+
+      db.run(
+        `INSERT INTO random_sessions (id, user1_id, user2_id, type, is_free, started_at, status)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')`,
+        [sessionId, session.userId, matchedCandidate.userId, type, isFree]
+      );
+      saveDb();
+
+      const candidateProfile = queryOne(db, "SELECT id, username, gender, country, avatar_url, level, bio FROM users WHERE id = ?", [matchedCandidate.userId]);
+
+      sendToUser(matchedCandidate.userId, {
+        type: 'random_chat:matched',
+        sessionId,
+        partner: {
+          id: userRow.id,
+          username: userRow.username,
+          gender: userRow.gender,
+          country: userRow.country,
+          avatarUrl: userRow.avatar_url,
+          level: userRow.level,
+          bio: userRow.bio || '',
+          interests: userInterests
+        },
+        typeOfChat: type,
+        isFree: isFree === 1,
+        freeDurationSeconds: settings.free_minutes_per_session * 60,
+        pricePerMin: priceMap[type] || 1
+      });
+
+      return res.json({
+        success: true,
+        matched: true,
+        sessionId,
+        partner: {
+          id: candidateProfile?.id,
+          username: candidateProfile?.username,
+          gender: candidateProfile?.gender,
+          country: candidateProfile?.country,
+          avatarUrl: candidateProfile?.avatar_url,
+          level: candidateProfile?.level,
+          bio: candidateProfile?.bio || '',
+          interests: matchedCandidate.interests
+        },
+        typeOfChat: type,
+        isFree: isFree === 1,
+        freeDurationSeconds: settings.free_minutes_per_session * 60,
+        pricePerMin: priceMap[type] || 1
+      });
+    } else {
+      randomChatWaiters.set(session.userId, {
+        userId: session.userId,
+        username: userRow.username,
+        gender: userRow.gender,
+        country: userRow.country,
+        interests: userInterests,
+        type,
+        targetGender,
+        targetCountry,
+        targetInterests,
+        queuedAt: now
+      });
+
+      return res.json({
+        success: true,
+        matched: false,
+        queued: true,
+        message: 'جاري البحث عن شخص عشوائي يطابق اختياراتك...'
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في عملية البحث والمطابقة' });
+  }
+});
+
+// 3. Cancel Search Queue
+app.post('/api/random-chat/cancel', requireAuth, async (req: Request, res: Response) => {
+  const session = (req as any).user as UserSession;
+  randomChatWaiters.delete(session.userId);
+  return res.json({ success: true });
+});
+
+// 4. End Active Session
+app.post('/api/random-chat/end', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { sessionId } = req.body;
+    const db = await getDb();
+    const settings = getRandomSettings(db);
+
+    const active = queryOne(
+      db,
+      "SELECT * FROM random_sessions WHERE id = ? AND (user1_id = ? OR user2_id = ?) AND status = 'active'",
+      [sessionId, session.userId, session.userId]
+    );
+
+    if (!active) {
+      return res.json({ success: true, message: 'الجلسة غير نشطة' });
+    }
+
+    const partnerId = active.user1_id === session.userId ? active.user2_id : active.user1_id;
+    const durationSeconds = Math.max(1, Math.round((Date.now() - new Date(active.started_at).getTime()) / 1000));
+
+    let costCharged = 0;
+    if (active.is_free === 0) {
+      const priceMap: Record<string, number> = {
+        text: settings.price_chat_per_min || 1,
+        voice: settings.price_voice_per_min || 3,
+        video: settings.price_video_per_min || 5
+      };
+      const rate = priceMap[active.type] || 1;
+      const billedMinutes = Math.max(1, Math.ceil(durationSeconds / 60));
+      costCharged = billedMinutes * rate;
+
+      db.run("UPDATE users SET coins = MAX(0, coins - ?) WHERE id = ?", [costCharged, session.userId]);
+      const txId = 'tx_rc_' + Math.random().toString(36).substring(2, 9);
+      db.run(
+        "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'random_chat', ?)",
+        [txId, session.userId, -costCharged, `رسوم جلسة تواصل عشوائي (${billedMinutes} دقيقة)`]
+      );
+    }
+
+    db.run(
+      "UPDATE random_sessions SET status = 'ended', ended_at = CURRENT_TIMESTAMP, duration_seconds = ?, coins_charged = ? WHERE id = ?",
+      [durationSeconds, costCharged, active.id]
+    );
+    saveDb();
+
+    sendToUser(partnerId, {
+      type: 'random_chat:ended',
+      sessionId: active.id,
+      endedBy: session.userId,
+      durationSeconds
+    });
+
+    return res.json({
+      success: true,
+      durationSeconds,
+      costCharged
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في إنهاء الجلسة' });
+  }
+});
+
+// Story Ads Endpoints
+app.get('/api/story-ads', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const ads = queryAll(db, "SELECT * FROM story_ads WHERE is_active = 1 ORDER BY priority DESC, created_at DESC");
+    return res.json({ success: true, ads });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في جلب الإعلانات' });
+  }
+});
+
+app.post('/api/story-ads/:id/view', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    db.run("UPDATE story_ads SET views_count = views_count + 1 WHERE id = ?", [req.params.id]);
+    saveDb();
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ error: 'Error' });
+  }
+});
+
+app.post('/api/story-ads/:id/click', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    db.run("UPDATE story_ads SET clicks_count = clicks_count + 1 WHERE id = ?", [req.params.id]);
+    saveDb();
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ error: 'Error' });
+  }
+});
+
+app.get('/api/admin/story-ads', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const ads = queryAll(db, "SELECT * FROM story_ads ORDER BY created_at DESC");
+    return res.json({ success: true, ads });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في جلب الإعلانات' });
+  }
+});
+
+app.post('/api/admin/story-ads', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const { title, description, image_url, link_url, is_active = 1, display_interval = 3, priority = 1 } = req.body;
+    if (!title || !image_url) {
+      return res.status(400).json({ error: 'العنوان والصورة مطلوبان' });
+    }
+    const db = await getDb();
+    const id = 'ad_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    db.run(
+      `INSERT INTO story_ads (id, title, description, image_url, link_url, is_active, display_interval, priority)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, title, description || '', image_url, link_url || '', is_active ? 1 : 0, Number(display_interval) || 3, Number(priority) || 1]
+    );
+    saveDb();
+    return res.json({ success: true, id });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في إنشاء الإعلان' });
+  }
+});
+
+app.put('/api/admin/story-ads/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const { title, description, image_url, link_url, is_active, display_interval, priority } = req.body;
+    const db = await getDb();
+    db.run(
+      `UPDATE story_ads SET
+        title = COALESCE(?, title),
+        description = COALESCE(?, description),
+        image_url = COALESCE(?, image_url),
+        link_url = COALESCE(?, link_url),
+        is_active = COALESCE(?, is_active),
+        display_interval = COALESCE(?, display_interval),
+        priority = COALESCE(?, priority)
+       WHERE id = ?`,
+      [title, description, image_url, link_url, is_active !== undefined ? (is_active ? 1 : 0) : null, display_interval, priority, req.params.id]
+    );
+    saveDb();
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في تحديث الإعلان' });
+  }
+});
+
+app.delete('/api/admin/story-ads/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    db.run("DELETE FROM story_ads WHERE id = ?", [req.params.id]);
+    saveDb();
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في حذف الإعلان' });
+  }
+});
+
+app.get('/api/admin/random-settings', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const settings = getRandomSettings(db);
+    return res.json({ success: true, settings });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في جلب إعدادات التواصل العشوائي' });
+  }
+});
+
+app.put('/api/admin/random-settings', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const { price_chat_per_min, price_voice_per_min, price_video_per_min, free_attempts, free_minutes_per_session } = req.body;
+    const db = await getDb();
+    if (price_chat_per_min !== undefined) db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('price_chat_per_min', ?)", [String(price_chat_per_min)]);
+    if (price_voice_per_min !== undefined) db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('price_voice_per_min', ?)", [String(price_voice_per_min)]);
+    if (price_video_per_min !== undefined) db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('price_video_per_min', ?)", [String(price_video_per_min)]);
+    if (free_attempts !== undefined) db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('free_attempts', ?)", [String(free_attempts)]);
+    if (free_minutes_per_session !== undefined) db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('free_minutes_per_session', ?)", [String(free_minutes_per_session)]);
+    saveDb();
+    return res.json({ success: true, settings: getRandomSettings(db) });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في تحديث إعدادات التواصل العشوائي' });
   }
 });
 
@@ -6051,7 +6687,7 @@ process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
 
 async function setupVite() {
-  const isProd = process.env.NODE_ENV === 'production' || fs.existsSync(path.resolve(process.cwd(), 'dist'));
+  const isProd = process.env.NODE_ENV === 'production' && fs.existsSync(path.resolve(process.cwd(), 'dist'));
 
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');

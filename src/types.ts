@@ -200,9 +200,12 @@ export interface RoomMessage {
   room_id: string;
   sender_id: string;
   sender_username: string;
+  username?: string;
   sender_gender: Gender;
+  gender?: Gender | string;
   sender_avatar?: string;
   sender_vip?: VipLevel;
+  role?: string;
   content: string;
   type: string;
   media_url?: string;

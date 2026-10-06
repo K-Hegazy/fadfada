@@ -22,7 +22,8 @@ import {
   X,
   Bot,
   Calendar,
-  Newspaper
+  Newspaper,
+  Shuffle
 } from 'lucide-react';
 import { OwnerBadge, isUserOwner } from './OwnerBadge';
 
@@ -72,6 +73,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     {
       title: 'المحادثات والعلاقات',
       items: [
+        { key: 'random_chat', label: 'تواصل عشوائي', icon: Shuffle },
         { key: 'messages', label: 'الرسائل', icon: MessageCircle, badge: user?.unreadMessages },
         { key: 'friends', label: 'الأصدقاء', icon: UserPlus, badge: user?.pendingFriendRequests },
         { key: 'stories', label: 'القصص (24h)', icon: Sparkles },

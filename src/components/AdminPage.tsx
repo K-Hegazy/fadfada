@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { apiRequest } from '../services/api';
+import { apiRequest, uploadMedia } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import {
   ShieldAlert,
@@ -30,7 +30,12 @@ import {
   RefreshCw,
   Calendar,
   Newspaper,
-  Target
+  Target,
+  Megaphone,
+  Shuffle,
+  ExternalLink,
+  Eye,
+  MousePointerClick
 } from 'lucide-react';
 import { EventsPage } from './EventsPage';
 import { NewsPage } from './NewsPage';
@@ -38,7 +43,7 @@ import { MissionsPage } from './MissionsPage';
 
 export const AdminPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'events' | 'news' | 'missions' | 'reports' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'events' | 'news' | 'missions' | 'reports' | 'settings' | 'story_ads' | 'random_chat'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [reportsList, setReportsList] = useState<any[]>([]);
@@ -70,6 +75,30 @@ export const AdminPage: React.FC = () => {
   // Settings states
   const [guestLimit, setGuestLimit] = useState<number>(500);
   const [settingsSaved, setSettingsSaved] = useState<boolean>(false);
+
+  // Story Ads states
+  const [storyAdsList, setStoryAdsList] = useState<any[]>([]);
+  const [adModalOpen, setAdModalOpen] = useState<boolean>(false);
+  const [editingAd, setEditingAd] = useState<any | null>(null);
+  const [adFormTitle, setAdFormTitle] = useState<string>('');
+  const [adFormDesc, setAdFormDesc] = useState<string>('');
+  const [adFormImage, setAdFormImage] = useState<string>('');
+  const [adFormLink, setAdFormLink] = useState<string>('');
+  const [adFormPriority, setAdFormPriority] = useState<number>(1);
+  const [adFormInterval, setAdFormInterval] = useState<number>(3);
+  const [adFormActive, setAdFormActive] = useState<boolean>(true);
+  const [savingAd, setSavingAd] = useState<boolean>(false);
+
+  // Random Chat Pricing & Limits states
+  const [randomSettings, setRandomSettings] = useState({
+    price_chat_per_min: 1,
+    price_voice_per_min: 3,
+    price_video_per_min: 5,
+    free_attempts: 4,
+    free_minutes_per_session: 5
+  });
+  const [savingRandomSettings, setSavingRandomSettings] = useState<boolean>(false);
+  const [randomSettingsSaved, setRandomSettingsSaved] = useState<boolean>(false);
 
   const isOwner = user?.role === 'owner';
   const isAdmin = user?.role === 'admin' || isOwner;
@@ -140,6 +169,38 @@ export const AdminPage: React.FC = () => {
     }
   };
 
+  const fetchStoryAds = async () => {
+    try {
+      setLoading(true);
+      const res = await apiRequest('/admin/story-ads');
+      setStoryAdsList(res.ads || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchRandomSettings = async () => {
+    try {
+      setLoading(true);
+      const res = await apiRequest('/admin/random-settings');
+      if (res.settings) {
+        setRandomSettings({
+          price_chat_per_min: Number(res.settings.price_chat_per_min) || 1,
+          price_voice_per_min: Number(res.settings.price_voice_per_min) || 3,
+          price_video_per_min: Number(res.settings.price_video_per_min) || 5,
+          free_attempts: Number(res.settings.free_attempts) || 4,
+          free_minutes_per_session: Number(res.settings.free_minutes_per_session) || 5
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'overview') fetchOverview();
     if (activeTab === 'users') fetchUsers();
@@ -152,7 +213,122 @@ export const AdminPage: React.FC = () => {
       fetchUsers();
     }
     if (activeTab === 'reports') fetchReports();
+    if (activeTab === 'story_ads') fetchStoryAds();
+    if (activeTab === 'random_chat') fetchRandomSettings();
   }, [activeTab]);
+
+  const handleSaveRandomSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingRandomSettings(true);
+    try {
+      await apiRequest('/admin/random-settings', {
+        method: 'PUT',
+        body: JSON.stringify(randomSettings)
+      });
+      setRandomSettingsSaved(true);
+      showNotification('تم حفظ أسعار وإعدادات التواصل العشوائي بنجاح!');
+      setTimeout(() => setRandomSettingsSaved(false), 2500);
+    } catch (err: any) {
+      alert(err.message || 'فشل حفظ الإعدادات');
+    } finally {
+      setSavingRandomSettings(false);
+    }
+  };
+
+  const handleOpenNewAdModal = () => {
+    setEditingAd(null);
+    setAdFormTitle('');
+    setAdFormDesc('');
+    setAdFormImage('');
+    setAdFormLink('');
+    setAdFormPriority(1);
+    setAdFormInterval(3);
+    setAdFormActive(true);
+    setAdModalOpen(true);
+  };
+
+  const handleOpenEditAdModal = (ad: any) => {
+    setEditingAd(ad);
+    setAdFormTitle(ad.title || '');
+    setAdFormDesc(ad.description || '');
+    setAdFormImage(ad.image_url || '');
+    setAdFormLink(ad.link_url || '');
+    setAdFormPriority(ad.priority || 1);
+    setAdFormInterval(ad.display_interval || 3);
+    setAdFormActive(ad.is_active === 1);
+    setAdModalOpen(true);
+  };
+
+  const handleSaveAd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adFormTitle.trim() || !adFormImage.trim()) {
+      alert('العنوان وصورة الإعلان مطلوبان');
+      return;
+    }
+    setSavingAd(true);
+    try {
+      if (editingAd) {
+        await apiRequest(`/admin/story-ads/${editingAd.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            title: adFormTitle.trim(),
+            description: adFormDesc.trim(),
+            image_url: adFormImage.trim(),
+            link_url: adFormLink.trim(),
+            priority: Number(adFormPriority) || 1,
+            display_interval: Number(adFormInterval) || 3,
+            is_active: adFormActive ? 1 : 0
+          })
+        });
+        showNotification('تم تحديث الإعلان بنجاح');
+      } else {
+        await apiRequest('/admin/story-ads', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: adFormTitle.trim(),
+            description: adFormDesc.trim(),
+            image_url: adFormImage.trim(),
+            link_url: adFormLink.trim(),
+            priority: Number(adFormPriority) || 1,
+            display_interval: Number(adFormInterval) || 3,
+            is_active: adFormActive ? 1 : 0
+          })
+        });
+        showNotification('تمت إضافة الإعلان بنجاح');
+      }
+      setAdModalOpen(false);
+      fetchStoryAds();
+    } catch (err: any) {
+      alert(err.message || 'فشل حفظ الإعلان');
+    } finally {
+      setSavingAd(false);
+    }
+  };
+
+  const handleDeleteAd = async (adId: string) => {
+    if (!confirm('هل أنت متأكد من حذف هذا الإعلان نهائياً؟')) return;
+    try {
+      await apiRequest(`/admin/story-ads/${adId}`, { method: 'DELETE' });
+      showNotification('تم حذف الإعلان بنجاح');
+      fetchStoryAds();
+    } catch (err: any) {
+      alert(err.message || 'فشل حذف الإعلان');
+    }
+  };
+
+  const handleToggleAdActive = async (ad: any) => {
+    try {
+      const nextState = ad.is_active === 1 ? 0 : 1;
+      await apiRequest(`/admin/story-ads/${ad.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_active: nextState })
+      });
+      fetchStoryAds();
+      showNotification(nextState === 1 ? 'تم تفعيل الإعلان' : 'تم تعطيل الإعلان');
+    } catch (err: any) {
+      alert('فشل تغيير حالة الإعلان');
+    }
+  };
 
   const handleBanUser = async (userId: string, currentBanned: boolean) => {
     if (!confirm(currentBanned ? 'إلغاء حظر المستخدم؟' : 'هل أنت متأكد من حظر هذا المستخدم؟')) return;
@@ -467,6 +643,24 @@ export const AdminPage: React.FC = () => {
               >
                 <Target className="w-3.5 h-3.5 text-amber-400" />
                 المهام اليومية
+              </button>
+              <button
+                onClick={() => setActiveTab('story_ads')}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === 'story_ads' ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-sm' : 'text-neutral-400 hover:text-amber-300'
+                }`}
+              >
+                <Megaphone className="w-3.5 h-3.5 text-amber-400" />
+                إعلانات القصص
+              </button>
+              <button
+                onClick={() => setActiveTab('random_chat')}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === 'random_chat' ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-sm' : 'text-neutral-400 hover:text-amber-300'
+                }`}
+              >
+                <Shuffle className="w-3.5 h-3.5 text-amber-400" />
+                أسعار التواصل العشوائي
               </button>
             </>
           )}
@@ -1102,6 +1296,452 @@ export const AdminPage: React.FC = () => {
               حفظ إعدادات المنصة
             </button>
           </form>
+        </div>
+      )}
+
+      {/* 7. STORY ADS MANAGEMENT TAB */}
+      {activeTab === 'story_ads' && isOwner && (
+        <div className="space-y-5 animate-in fade-in" dir="rtl">
+          <div className="p-5 rounded-3xl bg-[#0e1017] border border-amber-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="font-cairo font-bold text-base text-white flex items-center gap-2">
+                <Megaphone className="w-5 h-5 text-amber-400" />
+                إدارة الإعلانات داخل القصص (Stories Ads)
+              </h2>
+              <p className="text-xs text-neutral-400 font-tajawal max-w-xl">
+                إعلانات هادئة ورشيقة تظهر أثناء تصفح القصص بمعدل تكرار محدد ومكتوب عليها "إعلان ممول"، مع تتبع مرات المشاهدة والنقرات.
+              </p>
+            </div>
+            <button
+              onClick={handleOpenNewAdModal}
+              className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs font-cairo flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer transition-all shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>إضافة إعلان جديد</span>
+            </button>
+          </div>
+
+          {/* Ads List */}
+          {loading ? (
+            <div className="p-8 text-center text-neutral-400 text-xs">جاري تحميل قائمة الإعلانات...</div>
+          ) : storyAdsList.length === 0 ? (
+            <div className="p-12 text-center rounded-3xl bg-neutral-900/40 border border-neutral-800 space-y-3 max-w-md mx-auto">
+              <Megaphone className="w-10 h-10 text-amber-400 mx-auto opacity-70" />
+              <h3 className="font-cairo font-bold text-white text-sm">لا توجد إعلانات منشأة حالياً</h3>
+              <p className="text-xs text-neutral-400 font-tajawal">
+                يمكنك إنشاء إعلان جديد الآن وإدارته، وتحديد تكرار ظهوره داخل تجربة القصص.
+              </p>
+              <button
+                onClick={handleOpenNewAdModal}
+                className="px-4 py-2 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs cursor-pointer"
+              >
+                + إنشاء أول إعلان
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {storyAdsList.map((ad) => {
+                const isActive = ad.is_active === 1;
+                return (
+                  <div
+                    key={ad.id}
+                    className={`rounded-2xl border p-4 flex flex-col justify-between space-y-3 transition-all ${
+                      isActive
+                        ? 'bg-[#0f131c] border-neutral-800 hover:border-amber-600/60'
+                        : 'bg-neutral-950/60 border-neutral-800/50 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="w-16 h-16 rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 shrink-0">
+                        {ad.image_url ? (
+                          <img
+                            src={ad.image_url}
+                            alt={ad.title}
+                            loading="lazy"
+                            decoding="async"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-neutral-600">
+                            <Megaphone className="w-6 h-6" />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <h4 className="font-cairo font-bold text-xs text-white truncate">{ad.title}</h4>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                              isActive
+                                ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                : 'bg-neutral-800 text-neutral-400'
+                            }`}
+                          >
+                            {isActive ? 'مفعّل' : 'معطّل'}
+                          </span>
+                        </div>
+                        {ad.description && (
+                          <p className="text-[11px] text-neutral-400 font-tajawal line-clamp-2">
+                            {ad.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5 p-2 rounded-xl bg-neutral-900/60 border border-neutral-800/80 text-[10px] text-neutral-400 font-tajawal">
+                      <div>
+                        <span className="block text-neutral-500">التكرار:</span>
+                        <strong className="text-white">كل {ad.display_interval || 3} قصص</strong>
+                      </div>
+                      <div>
+                        <span className="block text-neutral-500">المشاهدات:</span>
+                        <strong className="text-white flex items-center gap-1">
+                          <Eye className="w-2.5 h-2.5 text-neutral-400" />
+                          {ad.views_count || 0}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="block text-neutral-500">النقرات:</span>
+                        <strong className="text-white flex items-center gap-1">
+                          <MousePointerClick className="w-2.5 h-2.5 text-amber-400" />
+                          {ad.clicks_count || 0}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {ad.link_url && (
+                      <a
+                        href={ad.link_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[10px] text-amber-400 hover:underline flex items-center gap-1 truncate"
+                      >
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{ad.link_url}</span>
+                      </a>
+                    )}
+
+                    <div className="pt-2 border-t border-neutral-800 flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => handleToggleAdActive(ad)}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg cursor-pointer ${
+                          isActive
+                            ? 'text-neutral-400 hover:text-white bg-neutral-900 hover:bg-neutral-800'
+                            : 'text-emerald-300 hover:text-emerald-200 bg-emerald-950/80 border border-emerald-800'
+                        }`}
+                      >
+                        {isActive ? 'تعطيل' : 'تفعيل'}
+                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleOpenEditAdModal(ad)}
+                          className="p-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white cursor-pointer"
+                          title="تعديل الإعلان"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAd(ad.id)}
+                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 cursor-pointer"
+                          title="حذف الإعلان"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 8. RANDOM CHAT PRICING & LIMITS TAB */}
+      {activeTab === 'random_chat' && isOwner && (
+        <div className="max-w-2xl p-6 rounded-3xl bg-[#0e1017] border border-amber-800/60 space-y-5 animate-in fade-in" dir="rtl">
+          <div className="space-y-1">
+            <h2 className="font-cairo font-bold text-base text-white flex items-center gap-2">
+              <Shuffle className="w-5 h-5 text-amber-400" />
+              إعدادات وأسعار التواصل العشوائي
+            </h2>
+            <p className="text-xs text-neutral-400 font-tajawal">
+              تحديد أسعار الدقائق بالكوينز للدردشة النصية والمكالمات الصوتية والمرئية، وتحديد عدد ومدّة الجلسات المجانية. جميع الحسابات والتوقيتات تتم برمجتها Server-Side لضمان النزاهة.
+            </p>
+          </div>
+
+          <form onSubmit={handleSaveRandomSettings} className="space-y-4">
+            <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-800/40 text-xs text-amber-300 font-tajawal">
+              🌟 كل مستخدم يحصل تلقائياً على <strong>{randomSettings.free_attempts} جلسات مجانية</strong> مدة كل جلسة <strong>{randomSettings.free_minutes_per_session} دقائق</strong>، وبعد انتهائها يتم احتساب الرصيد بالدقائق وفق الأسعار أدناه.
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="p-3.5 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-1.5">
+                <label className="block text-xs font-semibold text-white font-cairo">
+                  سعر المحادثة النصية:
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={randomSettings.price_chat_per_min}
+                    onChange={(e) =>
+                      setRandomSettings({ ...randomSettings, price_chat_per_min: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs font-bold font-cairo"
+                  />
+                  <span className="text-[11px] text-neutral-400 whitespace-nowrap">كوينز/دقيقة</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-1.5">
+                <label className="block text-xs font-semibold text-white font-cairo">
+                  سعر المكالمة الصوتية:
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={randomSettings.price_voice_per_min}
+                    onChange={(e) =>
+                      setRandomSettings({ ...randomSettings, price_voice_per_min: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs font-bold font-cairo"
+                  />
+                  <span className="text-[11px] text-neutral-400 whitespace-nowrap">كوينز/دقيقة</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-1.5">
+                <label className="block text-xs font-semibold text-white font-cairo">
+                  سعر مكالمة الفيديو:
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={randomSettings.price_video_per_min}
+                    onChange={(e) =>
+                      setRandomSettings({ ...randomSettings, price_video_per_min: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs font-bold font-cairo"
+                  />
+                  <span className="text-[11px] text-neutral-400 whitespace-nowrap">كوينز/دقيقة</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              <div className="p-3.5 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-1.5">
+                <label className="block text-xs font-semibold text-white font-cairo">
+                  عدد الجلسات المجانية الإجمالية:
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={randomSettings.free_attempts}
+                    onChange={(e) =>
+                      setRandomSettings({ ...randomSettings, free_attempts: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs font-bold font-cairo"
+                  />
+                  <span className="text-[11px] text-neutral-400 whitespace-nowrap">جلسات مجانية</span>
+                </div>
+                <p className="text-[10px] text-neutral-500 font-tajawal">الافتراضي: 4 جلسات لكل مستخدم.</p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-1.5">
+                <label className="block text-xs font-semibold text-white font-cairo">
+                  مدة الجلسة المجانية الواحدة:
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={randomSettings.free_minutes_per_session}
+                    onChange={(e) =>
+                      setRandomSettings({ ...randomSettings, free_minutes_per_session: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs font-bold font-cairo"
+                  />
+                  <span className="text-[11px] text-neutral-400 whitespace-nowrap">دقائق</span>
+                </div>
+                <p className="text-[10px] text-neutral-500 font-tajawal">الافتراضي: 5 دقائق لكل جلسة.</p>
+              </div>
+            </div>
+
+            {randomSettingsSaved && (
+              <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-300 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>تم حفظ أسعار وإعدادات التواصل العشوائي بنجاح!</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={savingRandomSettings}
+              className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-sm font-cairo shadow-lg shadow-amber-500/20 cursor-pointer disabled:opacity-50"
+            >
+              {savingRandomSettings ? 'جاري الحفظ...' : 'حفظ أسعار وإعدادات التواصل العشوائي'}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* AD CREATE / EDIT MODAL */}
+      {adModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in" dir="rtl">
+          <div className="w-full max-w-lg rounded-3xl bg-[#0e1017] border border-amber-800/80 p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2 font-cairo font-bold text-base text-white">
+                <Megaphone className="w-5 h-5 text-amber-400" />
+                <span>{editingAd ? 'تعديل الإعلان' : 'إضافة إعلان جديد للقصص'}</span>
+              </div>
+              <button
+                onClick={() => setAdModalOpen(false)}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAd} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">عنوان الإعلان *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="مثال: خصم 20% على شارات التميز..."
+                  value={adFormTitle}
+                  onChange={(e) => setAdFormTitle(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">الوصف (اختياري)</label>
+                <textarea
+                  rows={2}
+                  placeholder="وصف مختصر وجذاب للإعلان..."
+                  value={adFormDesc}
+                  onChange={(e) => setAdFormDesc(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">صورة الإعلان *</label>
+                <div className="space-y-2">
+                  <input
+                    type="url"
+                    placeholder="رابط مباشر للصورة (https://...)"
+                    value={adFormImage}
+                    onChange={(e) => setAdFormImage(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                  />
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-neutral-500">أو ارفع ملف صورة:</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = async () => {
+                          try {
+                            const uploaded = await uploadMedia(reader.result as string, file.name);
+                            setAdFormImage(uploaded);
+                          } catch {
+                            alert('فشل رفع الصورة');
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                      className="text-xs text-neutral-400 file:py-1 file:px-3 file:rounded-lg file:border-0 file:bg-neutral-800 file:text-neutral-300 file:text-xs cursor-pointer"
+                    />
+                  </div>
+                  {adFormImage && (
+                    <div className="w-full h-28 rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900">
+                      <img src={adFormImage} alt="Preview" className="w-full h-full object-cover" />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">رابط الإعلان (اختياري)</label>
+                <input
+                  type="url"
+                  placeholder="https://example.com/offer"
+                  value={adFormLink}
+                  onChange={(e) => setAdFormLink(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">
+                    معدل الظهور (كل كم قصة؟)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={adFormInterval}
+                    onChange={(e) => setAdFormInterval(Number(e.target.value))}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs font-bold"
+                  />
+                  <span className="text-[10px] text-neutral-500">الافتراضي: كل 3 قصص</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">
+                    الأولوية (1-10)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={adFormPriority}
+                    onChange={(e) => setAdFormPriority(Number(e.target.value))}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs font-bold"
+                  />
+                  <span className="text-[10px] text-neutral-500">الرقم الأكبر يظهر أولاً</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-neutral-900 border border-neutral-800">
+                <input
+                  type="checkbox"
+                  id="adActiveCheck"
+                  checked={adFormActive}
+                  onChange={(e) => setAdFormActive(e.target.checked)}
+                  className="w-4 h-4 accent-amber-500 cursor-pointer"
+                />
+                <label htmlFor="adActiveCheck" className="text-xs text-neutral-200 font-tajawal cursor-pointer select-none">
+                  تفعيل الإعلان فوراً للظهور في القصص
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingAd}
+                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs font-cairo shadow-lg shadow-amber-500/20 cursor-pointer disabled:opacity-50"
+              >
+                {savingAd ? 'جاري الحفظ...' : editingAd ? 'حفظ التعديلات' : 'إنشاء الإعلان'}
+              </button>
+            </form>
+          </div>
         </div>
       )}
 

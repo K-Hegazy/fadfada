@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense, lazy } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LandingPage } from './components/LandingPage';
 import { AppLayout } from './components/AppLayout';
@@ -8,25 +8,37 @@ import { MessagesPage } from './components/MessagesPage';
 import { FriendsPage } from './components/FriendsPage';
 import { RoomsPage } from './components/RoomsPage';
 import { StoriesPage } from './components/StoriesPage';
-import { MissionsPage } from './components/MissionsPage';
-import { AchievementsPage } from './components/AchievementsPage';
-import { LevelsPage } from './components/LevelsPage';
-import { WalletPage } from './components/WalletPage';
-import { GamesPage } from './components/GamesPage';
-import { ShopPage } from './components/ShopPage';
-import { EventsPage } from './components/EventsPage';
-import { NewsPage } from './components/NewsPage';
-import { SettingsPage } from './components/SettingsPage';
-import { AdminPage } from './components/AdminPage';
 import { UserProfileModal } from './components/UserProfileModal';
 import { GiftsModal } from './components/GiftsModal';
 import { FadfadaAssistantModal } from './components/FadfadaAssistantModal';
 import { EmailVerificationBanner } from './components/EmailVerificationBanner';
 import { LiveToastContainer } from './components/LiveToastContainer';
 import { LegalModal, LegalTab } from './components/LegalModal';
-import { MessageSquareHeart } from 'lucide-react';
+import { MessageSquareHeart, Loader2 } from 'lucide-react';
 import { OnlineUserItem } from './types';
 import { apiRequest } from './services/api';
+
+// Code Splitting / Lazy Loading for heavy secondary pages
+const MissionsPage = lazy(() => import('./components/MissionsPage').then(m => ({ default: m.MissionsPage })));
+const AchievementsPage = lazy(() => import('./components/AchievementsPage').then(m => ({ default: m.AchievementsPage })));
+const LevelsPage = lazy(() => import('./components/LevelsPage').then(m => ({ default: m.LevelsPage })));
+const WalletPage = lazy(() => import('./components/WalletPage').then(m => ({ default: m.WalletPage })));
+const GamesPage = lazy(() => import('./components/GamesPage').then(m => ({ default: m.GamesPage })));
+const ShopPage = lazy(() => import('./components/ShopPage').then(m => ({ default: m.ShopPage })));
+const EventsPage = lazy(() => import('./components/EventsPage').then(m => ({ default: m.EventsPage })));
+const NewsPage = lazy(() => import('./components/NewsPage').then(m => ({ default: m.NewsPage })));
+const SettingsPage = lazy(() => import('./components/SettingsPage').then(m => ({ default: m.SettingsPage })));
+const AdminPage = lazy(() => import('./components/AdminPage').then(m => ({ default: m.AdminPage })));
+const RandomChatPage = lazy(() => import('./components/RandomChatPage').then(m => ({ default: m.RandomChatPage })));
+
+function PageFallback() {
+  return (
+    <div className="flex items-center justify-center p-12 space-y-3 flex-col text-neutral-400 min-h-[300px]">
+      <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+      <span className="text-xs font-tajawal">جاري تحميل الصفحة...</span>
+    </div>
+  );
+}
 
 function AppContent() {
   const { user, loading } = useAuth();
@@ -302,16 +314,72 @@ function AppContent() {
       )}
 
       {currentTab === 'stories' && <StoriesPage />}
-      {currentTab === 'missions' && <MissionsPage />}
-      {currentTab === 'achievements' && <AchievementsPage />}
-      {currentTab === 'levels' && (
-        <LevelsPage onOpenProfile={(id) => setSelectedProfileId(id)} />
+
+      {currentTab === 'random_chat' && (
+        <Suspense fallback={<PageFallback />}>
+          <RandomChatPage />
+        </Suspense>
       )}
-      {currentTab === 'wallet' && <WalletPage />}
-      {currentTab === 'games' && <GamesPage />}
-      {currentTab === 'shop' && <ShopPage />}
-      {currentTab === 'settings' && <SettingsPage />}
-      {currentTab === 'admin' && <AdminPage />}
+
+      {currentTab === 'missions' && (
+        <Suspense fallback={<PageFallback />}>
+          <MissionsPage />
+        </Suspense>
+      )}
+
+      {currentTab === 'achievements' && (
+        <Suspense fallback={<PageFallback />}>
+          <AchievementsPage />
+        </Suspense>
+      )}
+
+      {currentTab === 'levels' && (
+        <Suspense fallback={<PageFallback />}>
+          <LevelsPage onOpenProfile={(id) => setSelectedProfileId(id)} />
+        </Suspense>
+      )}
+
+      {currentTab === 'wallet' && (
+        <Suspense fallback={<PageFallback />}>
+          <WalletPage />
+        </Suspense>
+      )}
+
+      {currentTab === 'games' && (
+        <Suspense fallback={<PageFallback />}>
+          <GamesPage />
+        </Suspense>
+      )}
+
+      {currentTab === 'shop' && (
+        <Suspense fallback={<PageFallback />}>
+          <ShopPage />
+        </Suspense>
+      )}
+
+      {currentTab === 'events' && (
+        <Suspense fallback={<PageFallback />}>
+          <EventsPage onOpenProfile={(id) => setSelectedProfileId(id)} />
+        </Suspense>
+      )}
+
+      {currentTab === 'news' && (
+        <Suspense fallback={<PageFallback />}>
+          <NewsPage onOpenProfile={(id) => setSelectedProfileId(id)} />
+        </Suspense>
+      )}
+
+      {currentTab === 'settings' && (
+        <Suspense fallback={<PageFallback />}>
+          <SettingsPage />
+        </Suspense>
+      )}
+
+      {currentTab === 'admin' && (
+        <Suspense fallback={<PageFallback />}>
+          <AdminPage />
+        </Suspense>
+      )}
 
       {/* Global Modals */}
       {selectedProfileId && (

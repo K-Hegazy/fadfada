@@ -597,7 +597,8 @@ export const RoomsPage: React.FC = () => {
               ) : (
                 roomMessages.map(msg => {
                   const isMe = msg.sender_id === user?.id;
-                  const isFemale = msg.gender === 'female';
+                  const senderName = msg.username || msg.sender_username || 'عضو';
+                  const isFemale = (msg.gender || msg.sender_gender) === 'female';
                   return (
                     <div
                       key={msg.id}
@@ -608,13 +609,13 @@ export const RoomsPage: React.FC = () => {
                           isFemale ? 'bg-rose-950 text-rose-300' : 'bg-sky-950 text-sky-300'
                         }`}
                       >
-                        {msg.username.slice(0, 1).toUpperCase()}
+                        {senderName.slice(0, 1).toUpperCase()}
                       </div>
 
                       <div className={`space-y-1 max-w-[80%] ${isMe ? 'text-left' : 'text-right'}`}>
                         <div className="flex items-center gap-1.5 text-[11px] text-neutral-400">
-                          <span className="font-bold text-white">{msg.username}</span>
-                          {isUserOwner({ role: msg.role, username: msg.username }) && (
+                          <span className="font-bold text-white">{senderName}</span>
+                          {isUserOwner({ role: msg.role, username: senderName }) && (
                             <OwnerBadge size="xs" />
                           )}
                           <span>·</span>

@@ -617,7 +617,73 @@ function initSchema(db: SqlDatabase) {
       PRIMARY KEY (room_id, user_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    -- Terms & Conditions Agreement Tracking
+    CREATE TABLE IF NOT EXISTS terms_agreements (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      guest_session_id TEXT DEFAULT '',
+      is_guest INTEGER DEFAULT 0,
+      agreed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      terms_version TEXT DEFAULT '1.0',
+      ip_address TEXT DEFAULT '',
+      user_agent TEXT DEFAULT ''
+    );
+
+    -- Random Connect Sessions Tracking
+    CREATE TABLE IF NOT EXISTS random_sessions (
+      id TEXT PRIMARY KEY,
+      user1_id TEXT NOT NULL,
+      user2_id TEXT NOT NULL,
+      type TEXT NOT NULL, -- 'chat', 'voice', 'video'
+      is_free INTEGER DEFAULT 1,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      ended_at DATETIME DEFAULT NULL,
+      duration_seconds INTEGER DEFAULT 0,
+      coins_charged INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active'
+    );
+
+    -- Random Connect Settings
+    CREATE TABLE IF NOT EXISTS random_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    -- Story Ads / Sponsored Stories
+    CREATE TABLE IF NOT EXISTS story_ads (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      image_url TEXT NOT NULL,
+      link_url TEXT DEFAULT '',
+      is_active INTEGER DEFAULT 1,
+      display_interval INTEGER DEFAULT 3,
+      views_count INTEGER DEFAULT 0,
+      clicks_count INTEGER DEFAULT 0,
+      priority INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Game Transactions
+    CREATE TABLE IF NOT EXISTS game_transactions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      game TEXT NOT NULL, -- 'tictactoe', 'wheel', 'quiz'
+      type TEXT NOT NULL, -- 'entry', 'win', 'draw'
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
+
+  // Safe migrations for terms agreement & random connect
+  try { db.run("ALTER TABLE users ADD COLUMN terms_agreed INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE users ADD COLUMN terms_agreed_at DATETIME DEFAULT NULL"); } catch {}
+  try { db.run("ALTER TABLE users ADD COLUMN terms_version TEXT DEFAULT '1.0'"); } catch {}
+  try { db.run("ALTER TABLE users ADD COLUMN random_free_used INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE terms_agreements ADD COLUMN guest_session_id TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE terms_agreements ADD COLUMN user_agent TEXT DEFAULT ''"); } catch {}
 
   // Seed default system settings if not existing
   seedDefaultData(db);
@@ -1015,6 +1081,33 @@ function seedDefaultData(db: SqlDatabase) {
   // NOTE: Requirement 9 & 29 explicitly state:
   // "Do NOT seed demo rooms. Do NOT create fake/default rooms. The application must start with NO rooms unless created by the Owner."
   // We strictly respect this! 0 demo rooms seeded.
+
+  // Seed Random Connect Settings if empty
+  try {
+    const randExist = db.exec("SELECT COUNT(*) as c FROM random_settings");
+    if (!randExist[0]?.values[0]?.[0]) {
+      db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('price_chat_per_min', '1')");
+      db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('price_voice_per_min', '3')");
+      db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('price_video_per_min', '5')");
+      db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('free_attempts', '4')");
+      db.run("INSERT OR REPLACE INTO random_settings (key, value) VALUES ('free_minutes_per_session', '5')");
+    }
+  } catch (err) {
+    console.error('Error seeding random settings:', err);
+  }
+
+  // Seed sample Story Ad if empty
+  try {
+    const adExist = db.exec("SELECT COUNT(*) as c FROM story_ads");
+    if (!adExist[0]?.values[0]?.[0]) {
+      db.run(`
+        INSERT INTO story_ads (id, title, description, image_url, link_url, is_active, display_interval, priority)
+        VALUES ('ad_fadfada_vip', 'باقات VIP الملكية في فضفضه', 'ارتقِ بتجربتك الاجتماعية واحصل على شارات نادرة وتثبيت حصري لحسابك!', 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=800&q=80', '#shop', 1, 3, 1)
+      `);
+    }
+  } catch (err) {
+    console.error('Error seeding story ads:', err);
+  }
 }
 
 // Helper utility to execute queries and return structured array of objects

@@ -8,7 +8,7 @@ interface AuthContextType {
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   register: (data: any) => Promise<void>;
-  guestLogin: (nickname: string, gender: string, country?: string, isManualCountry?: boolean) => Promise<void>;
+  guestLogin: (nickname: string, gender: string, country?: string, isManualCountry?: boolean, termsAgreed?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   updateCoins: (amount: number) => void;
@@ -91,10 +91,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     socketService.connect();
   };
 
-  const guestLogin = async (nickname: string, gender: string, country?: string, isManualCountry?: boolean) => {
+  const guestLogin = async (nickname: string, gender: string, country?: string, isManualCountry?: boolean, termsAgreed: boolean = true) => {
     const res = await apiRequest<{ token: string; user: User }>('/auth/guest', {
       method: 'POST',
-      body: JSON.stringify({ nickname, gender, country, isManualCountry })
+      body: JSON.stringify({ nickname, gender, country, isManualCountry, termsAgreed })
     });
     setToken(res.token);
     setUser(res.user);

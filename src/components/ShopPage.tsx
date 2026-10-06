@@ -18,15 +18,15 @@ import {
   Package,
   Layers,
   Check,
-  RefreshCw
+  RefreshCw,
+  Zap
 } from 'lucide-react';
 import { ShopItem, UserInventoryItem } from '../types';
 
 export const ShopPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
   const token = getToken();
-  const [activeTab, setActiveTab] = useState<'catalog' | 'memberships' | 'inventory' | 'admin'>('catalog');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [activeTab, setActiveTab] = useState<'badges' | 'features' | 'memberships' | 'inventory' | 'admin'>('badges');
   const [items, setItems] = useState<ShopItem[]>([]);
   const [inventory, setInventory] = useState<UserInventoryItem[]>([]);
   const [vipPlans, setVipPlans] = useState<any[]>([]);
@@ -262,10 +262,9 @@ export const ShopPage: React.FC = () => {
   };
 
   const filteredItems = items.filter(item => {
-    if (selectedCategory === 'all') return true;
-    if (selectedCategory === 'badges') return item.type === 'badge';
-    if (selectedCategory === 'features') return item.type !== 'badge';
-    return item.category === selectedCategory;
+    if (activeTab === 'badges') return item.type === 'badge';
+    if (activeTab === 'features') return item.type !== 'badge';
+    return true;
   });
 
   return (
@@ -346,21 +345,36 @@ export const ShopPage: React.FC = () => {
         </div>
       )}
 
-      {/* Main Tabs */}
+      {/* 3 Dedicated Main Store Sections: Badges, Features, Memberships */}
       <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3 flex-wrap gap-3">
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar max-w-full pb-1">
+          {/* Section 1: Badges */}
           <button
-            onClick={() => setActiveTab('catalog')}
+            onClick={() => setActiveTab('badges')}
             className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer shrink-0 active:scale-95 ${
-              activeTab === 'catalog'
+              activeTab === 'badges'
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
                 : 'bg-neutral-900/60 text-neutral-400 hover:text-white border border-neutral-800'
             }`}
           >
-            <ShoppingBag className="w-4 h-4" />
-            <span>معروضات المتجر</span>
+            <Sparkles className="w-4 h-4 text-amber-400" />
+            <span>الشارات</span>
           </button>
 
+          {/* Section 2: Features */}
+          <button
+            onClick={() => setActiveTab('features')}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer shrink-0 active:scale-95 ${
+              activeTab === 'features'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                : 'bg-neutral-900/60 text-neutral-400 hover:text-white border border-neutral-800'
+            }`}
+          >
+            <Zap className="w-4 h-4 text-emerald-400" />
+            <span>المميزات</span>
+          </button>
+
+          {/* Section 3: Memberships */}
           <button
             onClick={() => setActiveTab('memberships')}
             className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer shrink-0 active:scale-95 ${
@@ -370,9 +384,10 @@ export const ShopPage: React.FC = () => {
             }`}
           >
             <Crown className="w-4 h-4 text-amber-400" />
-            <span>العضويات VIP</span>
+            <span>العضويات</span>
           </button>
 
+          {/* Inventory */}
           {!user?.isGuest && (
             <button
               onClick={() => setActiveTab('inventory')}
@@ -387,6 +402,7 @@ export const ShopPage: React.FC = () => {
             </button>
           )}
 
+          {/* Admin */}
           {isOwner && (
             <button
               onClick={() => setActiveTab('admin')}
@@ -401,32 +417,10 @@ export const ShopPage: React.FC = () => {
             </button>
           )}
         </div>
-
-        {activeTab === 'catalog' && (
-          <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-            {[
-              { id: 'all', label: 'الكل' },
-              { id: 'badges', label: 'الشارات الملكية' },
-              { id: 'features', label: 'المميزات والتثبيت' },
-            ].map(cat => (
-              <button
-                key={cat.id}
-                onClick={() => setSelectedCategory(cat.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                  selectedCategory === cat.id
-                    ? 'bg-neutral-800 text-white border border-neutral-700'
-                    : 'text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                {cat.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* CATALOG VIEW */}
-      {activeTab === 'catalog' && (
+      {/* ITEMS VIEW (Badges or Features) */}
+      {(activeTab === 'badges' || activeTab === 'features') && (
         <div className="space-y-6">
           {loading ? (
             <div className="text-center py-16 text-neutral-400">جاري تحميل عناصر المتجر...</div>
@@ -871,7 +865,7 @@ export const ShopPage: React.FC = () => {
                 لم تقم باقتناء أي شارات أو مميزات بعد. تصفح المعروضات الآن وتميز بحضور فريد!
               </p>
               <button
-                onClick={() => setActiveTab('catalog')}
+                onClick={() => setActiveTab('badges')}
                 className="px-5 py-2 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs hover:bg-amber-400 cursor-pointer"
               >
                 تصفح المعروضات
