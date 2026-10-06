@@ -24,7 +24,7 @@ import { OwnerBadge, isUserOwner } from './OwnerBadge';
 interface UserProfileModalProps {
   userId: string;
   onClose: () => void;
-  onStartChat: (userId: string) => void;
+  onStartChat: (userId: string, profile?: any) => void;
   onOpenGifts: (recipientId: string) => void;
 }
 
@@ -297,12 +297,12 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 <button
                   onClick={() => {
                     onClose();
-                    onStartChat(userId);
+                    onStartChat(userId, profile);
                   }}
-                  className="py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-600/20"
+                  className="py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-600/20 active:scale-95"
                 >
                   <MessageCircle className="w-4 h-4" />
-                  <span>بدء محادثة</span>
+                  <span>محادثة</span>
                 </button>
 
                 <button

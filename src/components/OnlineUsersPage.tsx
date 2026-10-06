@@ -12,7 +12,8 @@ import {
   RefreshCw,
   Sparkles,
   Smile,
-  X
+  X,
+  MessageCircle
 } from 'lucide-react';
 
 interface OnlineUsersPageProps {
@@ -451,12 +452,24 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
           </div>
         </div>
 
-        {/* Left Section: Indicative Touch Action Hint */}
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[11px] font-tajawal text-neutral-400 group-hover:text-emerald-300 transition-colors hidden sm:inline">
-            الملف الشخصي ←
-          </span>
-          <div className="w-8 h-8 rounded-xl bg-neutral-900/80 group-hover:bg-emerald-600/30 text-neutral-400 group-hover:text-emerald-300 flex items-center justify-center transition-all border border-neutral-800">
+        {/* Left Section: Indicative Touch Action Hint & Quick Chat */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartChat(item);
+            }}
+            className="px-2.5 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 transition-all cursor-pointer active:scale-95 flex items-center gap-1 text-[11px] font-bold font-tajawal shadow-sm"
+            title={`محادثة فورية مع ${item.username}`}
+          >
+            <MessageCircle className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">محادثة</span>
+          </button>
+          <div
+            className="w-8 h-8 rounded-xl bg-neutral-900/80 group-hover:bg-neutral-800 text-neutral-400 group-hover:text-emerald-300 flex items-center justify-center transition-all border border-neutral-800"
+            title="عرض الملف الشخصي"
+          >
             <span className="text-xs font-bold">👤</span>
           </div>
         </div>
@@ -588,8 +601,10 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
 
               <div
                 className={`grid ${
-                  compactGrid || activeChatUserId
-                    ? 'grid-cols-1 md:grid-cols-1 xl:grid-cols-2'
+                  compactGrid
+                    ? 'grid-cols-1'
+                    : activeChatUserId
+                    ? 'grid-cols-1 xl:grid-cols-2'
                     : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
                 } gap-2.5`}
               >
@@ -615,8 +630,10 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
 
               <div
                 className={`grid ${
-                  compactGrid || activeChatUserId
-                    ? 'grid-cols-1 md:grid-cols-1 xl:grid-cols-2'
+                  compactGrid
+                    ? 'grid-cols-1'
+                    : activeChatUserId
+                    ? 'grid-cols-1 xl:grid-cols-2'
                     : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
                 } gap-2.5`}
               >

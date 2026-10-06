@@ -1742,7 +1742,7 @@ app.post('/api/users/activity-status', requireAuth, async (req: Request, res: Re
 // 3. USER PROFILE & RELATIONSHIPS
 // ==========================================
 
-app.get('/api/users/:id/profile', requireAuth, async (req: Request, res: Response) => {
+app.get(['/api/users/:id/profile', '/api/users/:id'], requireAuth, async (req: Request, res: Response) => {
   try {
     const session = (req as any).user as UserSession;
     const targetId = req.params.id;
@@ -1860,28 +1860,31 @@ app.get('/api/users/:id/profile', requireAuth, async (req: Request, res: Respons
     const showOnline = user.privacy_online_status !== 'nobody';
     const showBio = user.privacy_profile_visibility !== 'friends' || isFriend || targetId === session.userId;
 
-    return res.json({
-      user: {
-        ...user,
-        isOwner: user.role === 'owner' || user.username?.toLowerCase() === 'hegazy',
-        bio: showBio ? user.bio : '',
-        isOnline: showOnline ? isUserOnline(targetId) : false,
-        interests,
-        achievements,
-        stats: {
-          friendsCount,
-          followersCount
-        },
-        relationships: {
-          isFriend,
-          friendRequestStatus: pendingRequest ? (pendingRequest.sender_id === session.userId ? 'sent' : 'received') : null,
-          requestId: pendingRequest?.id,
-          isFollowing,
-          isBlocked: isBlockedByMe,
-          isBlockedByThem: false,
-          isMuted
-        }
+    const userPayload = {
+      ...user,
+      isOwner: user.role === 'owner' || user.username?.toLowerCase() === 'hegazy',
+      bio: showBio ? user.bio : '',
+      isOnline: showOnline ? isUserOnline(targetId) : false,
+      interests,
+      achievements,
+      stats: {
+        friendsCount,
+        followersCount
+      },
+      relationships: {
+        isFriend,
+        friendRequestStatus: pendingRequest ? (pendingRequest.sender_id === session.userId ? 'sent' : 'received') : null,
+        requestId: pendingRequest?.id,
+        isFollowing,
+        isBlocked: isBlockedByMe,
+        isBlockedByThem: false,
+        isMuted
       }
+    };
+
+    return res.json({
+      user: userPayload,
+      profile: userPayload
     });
   } catch (error) {
     console.error('Profile error:', error);
@@ -4729,8 +4732,9 @@ app.post('/api/random-chat/end', requireAuth, async (req: Request, res: Response
       durationSeconds,
       costCharged
     });
-  } catch (err) {
-    return res.status(500).json({ error: 'خطأ في إنهاء الجلسة' });
+  } catch (err: any) {
+    console.error('Random chat end error:', err);
+    return res.status(500).json({ error: 'خطأ في إنهاء الجلسة', details: err?.message });
   }
 });
 
