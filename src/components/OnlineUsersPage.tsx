@@ -20,7 +20,9 @@ interface OnlineUsersPageProps {
   onOpenProfile: (userId: string) => void;
   onStartChat: (user: OnlineUserItem) => void;
   activeChatUserId?: string | null;
+  selectedUserId?: string | null;
   compactGrid?: boolean;
+  fillHeight?: boolean;
 }
 
 const COUNTRY_FLAGS: Record<string, string> = {
@@ -64,7 +66,9 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
   onOpenProfile,
   onStartChat,
   activeChatUserId,
-  compactGrid = false
+  selectedUserId,
+  compactGrid = false,
+  fillHeight = false
 }) => {
   const { user } = useAuth();
   const [users, setUsers] = useState<OnlineUserItem[]>([]);
@@ -336,14 +340,23 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
 
     if (isChatActive) {
       cardColorClasses += ' ring-2 ring-emerald-400 !border-emerald-400 !bg-[#131f29]';
+    } else if (selectedUserId === item.id) {
+      cardColorClasses += ' ring-2 ring-emerald-500/80 !border-emerald-500/80 !bg-[#101b22]';
     }
 
     return (
-      <button
+      <div
         key={item.id}
-        type="button"
+        role="button"
+        tabIndex={0}
         onClick={() => onOpenProfile(item.id)}
-        className={`w-full text-right group relative rounded-2xl p-3 border transition-all duration-200 cursor-pointer active:scale-[0.99] flex items-center justify-between gap-3 ${cardColorClasses}`}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpenProfile(item.id);
+          }
+        }}
+        className={`w-full text-right group relative rounded-2xl p-3 border transition-all duration-200 cursor-pointer active:scale-[0.99] flex items-center justify-between gap-3 select-none ${cardColorClasses}`}
         title={`اضغط لفتح الملف الشخصي لـ ${item.username}`}
       >
         {/* Pinned Tag */}
@@ -473,9 +486,220 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
             <span className="text-xs font-bold">👤</span>
           </div>
         </div>
-      </button>
+      </div>
     );
   };
+
+  if (fillHeight) {
+    return (
+      <div className="h-full min-h-0 flex flex-col overflow-hidden bg-[#090c13] rounded-2xl sm:rounded-3xl border border-neutral-800 shadow-xl select-none" dir="rtl">
+        {/* 1. Fixed Stationary Top Section (Header + Search) - NEVER SCROLLS */}
+        <div className="shrink-0 p-3 sm:p-4 bg-[#0a0d14]/95 border-b border-neutral-800/80 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 shrink-0">
+                <Users className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <h1 className="text-sm sm:text-base font-cairo font-black text-white truncate">
+                    المتواجدون حالياً
+                  </h1>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-600/60 text-[10px] font-black text-emerald-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    {onlineCount}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => setIsEditingStatus(true)}
+                className="px-2 py-1 rounded-xl bg-[#111622] hover:bg-[#161c2a] text-neutral-300 border border-neutral-750 text-[10px] font-tajawal flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                title="تعديل حالتي المباشرة"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                <span className="truncate max-w-[80px] font-medium text-emerald-200">
+                  {myActivityStatus}
+                </span>
+                <span>✏️</span>
+              </button>
+
+              <button
+                onClick={fetchUsers}
+                className="p-1.5 rounded-xl bg-[#111622] hover:bg-neutral-800 text-neutral-400 hover:text-white border border-neutral-750 transition-colors cursor-pointer active:scale-95"
+                title="تحديث القائمة"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Compact Clean Search Bar */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-neutral-500 absolute right-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="ابحث باسم المستخدم أو الدولة..."
+              className="w-full bg-[#080b12] border border-neutral-800 focus:border-emerald-500 rounded-xl pr-8 pl-8 py-2 text-xs text-white placeholder-neutral-500 outline-none transition-all font-tajawal min-h-[36px]"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white text-xs cursor-pointer p-0.5"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 2. Independent Scrollable List of Online Users - ONLY THIS CONTAINER SCROLLS */}
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-2.5 sm:p-3 space-y-4 custom-scrollbar">
+          {loading ? (
+            <div className="space-y-2.5">
+              {[1, 2, 3, 4, 5, 6, 7].map(i => (
+                <div
+                  key={i}
+                  className="h-18 rounded-2xl bg-[#0b0f18] border border-neutral-850 animate-pulse p-3 flex items-center gap-3"
+                >
+                  <div className="w-12 h-12 rounded-xl bg-neutral-800 shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3.5 bg-neutral-800 rounded w-1/3" />
+                    <div className="h-3 bg-neutral-800/60 rounded w-1/2" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="p-8 text-center rounded-2xl bg-[#0a0e16] border border-neutral-850 space-y-2">
+              <Users className="w-9 h-9 text-neutral-600 mx-auto" />
+              <h3 className="font-cairo font-bold text-sm text-white">لا يوجد أعضاء يطابقون بحثك</h3>
+              <p className="text-[11px] text-neutral-400 font-tajawal">
+                تأكد من كتابة اسم المستخدم أو الدولة بشكل صحيح.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Pinned Cards */}
+              {pinnedCards.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 px-1">
+                    <Crown className="w-3.5 h-3.5 text-amber-400" />
+                    <h2 className="font-cairo font-bold text-xs text-amber-300">
+                      الكروت المثبتة في الصدارة ⭐
+                    </h2>
+                    <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-950/80 text-amber-400 border border-amber-800/50 font-bold">
+                      {pinnedCards.length}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    {pinnedCards.map(item => renderUserCard(item, true))}
+                  </div>
+                </div>
+              )}
+
+              {/* Regular Online Users */}
+              {regularCards.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 px-1">
+                    <Users className="w-3.5 h-3.5 text-emerald-400" />
+                    <h2 className="font-cairo font-bold text-xs text-neutral-300">
+                      قائمة المتواجدين حالياً
+                    </h2>
+                    <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-neutral-900 text-neutral-400 border border-neutral-800 font-bold">
+                      {regularCards.length}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    {regularCards.map(item => renderUserCard(item, false))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Activity Status Selector Modal */}
+        {isEditingStatus && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+            <div className="w-full max-w-md bg-[#0e131d] border border-neutral-800 rounded-3xl p-5 space-y-4 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-neutral-850 pb-3">
+                <div className="flex items-center gap-2">
+                  <Smile className="w-5 h-5 text-emerald-400" />
+                  <h3 className="font-cairo font-bold text-base text-white">تحديد حالتي المباشرة</h3>
+                </div>
+                <button
+                  onClick={() => setIsEditingStatus(false)}
+                  className="text-neutral-400 hover:text-white p-1 rounded-lg cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-neutral-400 font-tajawal">اختر من الحالات الشائعة:</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {ACTIVITY_PRESETS.map((statusText) => (
+                    <button
+                      key={statusText}
+                      onClick={() => handleUpdateStatus(statusText)}
+                      disabled={savingStatus}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-tajawal transition-all cursor-pointer border active:scale-95 ${
+                        myActivityStatus === statusText
+                          ? 'bg-emerald-600 text-white border-emerald-500 font-bold shadow-md shadow-emerald-600/20'
+                          : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'
+                      }`}
+                    >
+                      {statusText}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Input */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (customStatusInput.trim()) {
+                    handleUpdateStatus(customStatusInput.trim());
+                    setCustomStatusInput('');
+                  }
+                }}
+                className="space-y-2 pt-2 border-t border-neutral-850"
+              >
+                <div className="text-xs text-neutral-400 font-tajawal">أو اكتب حالة مخصصة:</div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={customStatusInput}
+                    onChange={(e) => setCustomStatusInput(e.target.value)}
+                    placeholder="مثال: أستمتع بقهوتي الصباحية ☕"
+                    maxLength={40}
+                    className="flex-1 bg-neutral-950 border border-neutral-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-xs text-white placeholder-neutral-500 outline-none font-tajawal"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!customStatusInput.trim() || savingStatus}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-xs transition-colors cursor-pointer shrink-0"
+                  >
+                    حفظ
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 animate-in fade-in" dir="rtl">

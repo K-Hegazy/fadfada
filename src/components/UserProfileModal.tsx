@@ -26,13 +26,15 @@ interface UserProfileModalProps {
   onClose: () => void;
   onStartChat: (userId: string, profile?: any) => void;
   onOpenGifts: (recipientId: string) => void;
+  embedded?: boolean;
 }
 
 export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   userId,
   onClose,
   onStartChat,
-  onOpenGifts
+  onOpenGifts,
+  embedded = false
 }) => {
   const { user: currentUser } = useAuth();
   const [profile, setProfile] = useState<any>(null);
@@ -152,6 +154,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   };
 
   if (loading || !profile) {
+    if (embedded) {
+      return (
+        <div className="h-full min-h-0 flex-1 flex items-center justify-center p-6 bg-[#090c13] rounded-2xl sm:rounded-3xl border border-neutral-800">
+          <div className="flex flex-col items-center gap-2.5 text-neutral-400 font-tajawal">
+            <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs">جاري تحميل بيانات الملف الشخصي...</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
         <div className="p-8 rounded-3xl bg-[#0e1017] border border-neutral-800 text-neutral-400 font-tajawal">
@@ -164,21 +176,39 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const isFemale = profile.gender === 'female';
   const isMe = currentUser?.id === userId;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-      <div className="relative w-full max-w-lg bg-[#0d0f17] border border-neutral-800 rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden max-h-[92dvh] sm:max-h-[90vh] flex flex-col">
-        {/* Cover & Header */}
-        <div className={`h-24 sm:h-28 relative ${isFemale ? 'bg-gradient-to-r from-rose-950 via-pink-900 to-purple-950' : 'bg-gradient-to-r from-cyan-950 via-slate-900 to-sky-950'}`}>
-          <button
-            onClick={onClose}
-            className="absolute top-3 left-3 sm:top-4 sm:left-4 w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white/80 hover:text-white transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4 sm:w-5 sm:h-5" />
-          </button>
-        </div>
+  const contentJsx = (
+    <div
+      className={`relative w-full ${
+        embedded
+          ? 'h-full min-h-0 flex-1 flex flex-col bg-[#090c13] border border-neutral-800 rounded-2xl sm:rounded-3xl shadow-xl overflow-hidden'
+          : 'max-w-lg bg-[#0d0f17] border border-neutral-800 rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden max-h-[92dvh] sm:max-h-[90vh] flex flex-col'
+      }`}
+      dir="rtl"
+    >
+      {/* Cover & Header */}
+      <div
+        className={`h-24 sm:h-28 shrink-0 relative ${
+          isFemale
+            ? 'bg-gradient-to-r from-rose-950 via-pink-900 to-purple-950'
+            : 'bg-gradient-to-r from-cyan-950 via-slate-900 to-sky-950'
+        }`}
+      >
+        <button
+          onClick={onClose}
+          className={`absolute top-3 left-3 sm:top-4 sm:left-4 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer text-xs font-tajawal active:scale-95 ${
+            embedded
+              ? 'px-3 py-1.5 bg-black/60 hover:bg-black/80 text-neutral-200 hover:text-white border border-white/10 shadow-md'
+              : 'w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-black/40 backdrop-blur-md justify-center text-white/80 hover:text-white'
+          }`}
+          title="إغلاق الملف الشخصي"
+        >
+          <X className="w-4 h-4 sm:w-4 sm:h-4" />
+          {embedded && <span>إغلاق الملف</span>}
+        </button>
+      </div>
 
-        {/* Profile Details Container */}
-        <div className="px-3.5 sm:px-6 pb-4 sm:pb-6 pt-0 relative flex-1 overflow-y-auto space-y-4 sm:space-y-6">
+      {/* Profile Details Container */}
+      <div className="px-3.5 sm:px-6 pb-4 sm:pb-6 pt-0 relative flex-1 min-h-0 overflow-y-auto space-y-4 sm:space-y-6 custom-scrollbar">
           {/* Avatar & Online status */}
           <div className="flex justify-between items-end -mt-10 sm:-mt-12">
             <div className="relative">
@@ -453,6 +483,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
         )}
       </div>
+  );
+
+  if (embedded) {
+    return contentJsx;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+      {contentJsx}
     </div>
   );
 };

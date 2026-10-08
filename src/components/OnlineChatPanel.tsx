@@ -9,6 +9,7 @@ import {
   Mic,
   Square,
   Eye,
+  EyeOff,
   Crown,
   Sparkles,
   ArrowRight,
@@ -22,6 +23,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { OwnerBadge, isUserOwner } from './OwnerBadge';
+import { SelfDestructModal } from './SelfDestructModal';
 
 interface Message {
   id: string;
@@ -74,6 +76,12 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [inputText, setInputText] = useState<string>('');
   const [viewOnceEnabled, setViewOnceEnabled] = useState<boolean>(false);
+  const [selfDestructEnabled, setSelfDestructEnabled] = useState<boolean>(false);
+  const [activeSelfDestruct, setActiveSelfDestruct] = useState<{
+    messageId: string;
+    mediaUrl: string;
+    duration: number;
+  } | null>(null);
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [partnerTyping, setPartnerTyping] = useState<boolean>(false);
   const [partnerOnline, setPartnerOnline] = useState<boolean>(!!targetUser.isOnline);
@@ -191,6 +199,22 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
       );
     });
 
+    const unsubDestroyed = socketService.on('message:destroyed', (data: any) => {
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === data.messageId
+            ? {
+                ...m,
+                isDestroyed: true,
+                isViewed: true,
+                mediaUrl: '',
+                content: '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها'
+              }
+            : m
+        )
+      );
+    });
+
     const unsubTypingStart = socketService.on('typing:start', (data: any) => {
       if (data.senderId === targetUser.id) {
         setPartnerTyping(true);
@@ -212,6 +236,7 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
     return () => {
       unsubMsg();
       unsubViewOnce();
+      unsubDestroyed();
       unsubTypingStart();
       unsubTypingStop();
       unsubPresence();
@@ -383,7 +408,7 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
     }
   };
 
-  // Image Upload with optional View-Once
+  // Image Upload with optional View-Once or Self-Destruct
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !conversationId) return;
@@ -392,15 +417,22 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
     reader.onload = async () => {
       const tempId = 'temp_img_' + Date.now();
       const isViewOnce = viewOnceEnabled;
+      const isSelfDestruct = selfDestructEnabled;
 
       const optimisticMsg: Message = {
         id: tempId,
         senderId: user?.id || '',
         recipientId: targetUser.id,
-        content: isViewOnce ? '📷 صورة للعرض لمرة واحدة' : '📷 صورة مرفقة',
+        content: isSelfDestruct
+          ? '⏳ صورة مؤقتة ذاتية التدمير'
+          : isViewOnce
+          ? '📷 صورة للعرض لمرة واحدة'
+          : '📷 صورة مرفقة',
         type: 'image',
         mediaUrl: reader.result as string,
         isViewOnce,
+        isSelfDestruct,
+        selfDestructDuration: 10,
         isViewed: false,
         status: 'sending',
         createdAt: new Date().toISOString()
@@ -409,6 +441,7 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
       setMessages(prev => [...prev, optimisticMsg]);
       scrollToBottom();
       setViewOnceEnabled(false);
+      setSelfDestructEnabled(false);
 
       try {
         const uploadRes = await apiRequest<{ success: boolean; url: string }>('/upload', {
@@ -424,10 +457,16 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
           {
             method: 'POST',
             body: JSON.stringify({
-              content: isViewOnce ? '📷 صورة للعرض لمرة واحدة' : '📷 صورة مرفقة',
+              content: isSelfDestruct
+                ? '⏳ صورة مؤقتة ذاتية التدمير'
+                : isViewOnce
+                ? '📷 صورة للعرض لمرة واحدة'
+                : '📷 صورة مرفقة',
               type: 'image',
               mediaUrl: uploadRes.url,
-              isViewOnce
+              isViewOnce,
+              isSelfDestruct,
+              selfDestructDuration: isSelfDestruct ? 10 : 0
             })
           }
         );
@@ -444,6 +483,54 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
     };
     reader.readAsDataURL(file);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleTriggerSelfDestruct = async (msgId: string) => {
+    try {
+      const res = await apiRequest<{ success: boolean; duration: number; mediaUrl: string }>(
+        `/messages/${msgId}/view-self-destruct`,
+        { method: 'POST' }
+      );
+      if (res && res.mediaUrl) {
+        setActiveSelfDestruct({
+          messageId: msgId,
+          mediaUrl: res.mediaUrl,
+          duration: res.duration || 10
+        });
+      }
+    } catch (err: any) {
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === msgId
+            ? {
+                ...m,
+                isDestroyed: true,
+                mediaUrl: '',
+                content: '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها'
+              }
+            : m
+        )
+      );
+    }
+  };
+
+  const handleCloseSelfDestruct = () => {
+    if (activeSelfDestruct) {
+      const destroyedId = activeSelfDestruct.messageId;
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === destroyedId
+            ? {
+                ...m,
+                isDestroyed: true,
+                mediaUrl: '',
+                content: '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها'
+              }
+            : m
+        )
+      );
+      setActiveSelfDestruct(null);
+    }
   };
 
   // Voice recording
@@ -546,10 +633,10 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
 
   return (
     <div
-      className={`flex flex-col bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden shadow-2xl transition-all ${
+      className={`flex flex-col bg-[#090c13] border border-neutral-800 rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl transition-all ${
         isMobileModal
           ? 'fixed inset-0 z-50 rounded-none bg-neutral-950 flex flex-col h-[100dvh] max-h-[100dvh]'
-          : 'h-[620px] max-h-[85vh] sticky top-20'
+          : 'h-full min-h-0 flex-1'
       }`}
       dir="rtl"
     >
@@ -670,7 +757,7 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
       )}
 
       {/* Messages Body */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-neutral-950/50">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 bg-neutral-950/50 custom-scrollbar">
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-neutral-400">
             <div className="w-7 h-7 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
@@ -718,9 +805,38 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
                       : 'bg-neutral-850 border border-neutral-800 text-neutral-100 rounded-tl-none'
                   }`}
                 >
-                  {/* View Once Image */}
-                  {msg.isViewOnce ? (
-                    <div className="flex items-center gap-2 text-xs py-1 px-1 font-tajawal">
+                  {/* Self-Destruct Image Message */}
+                  {msg.isSelfDestruct ? (
+                    <div className="p-3 rounded-2xl bg-black/50 border border-amber-500/40 space-y-2 max-w-sm">
+                      <div className="flex items-center justify-between text-xs text-amber-300 font-bold font-cairo">
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-amber-400" />
+                          صورة ذاتية التدمير ({msg.selfDestructDuration || 10} ثوانٍ)
+                        </span>
+                      </div>
+
+                      {msg.isDestroyed ? (
+                        <div className="text-xs text-rose-400 font-semibold py-1.5 flex items-center gap-1.5 font-tajawal">
+                          <span>⚠️ تم فتح هذه الصورة ذاتياً وانتهت صلاحيتها نهائياً.</span>
+                        </div>
+                      ) : isMe ? (
+                        <div className="text-xs text-amber-200/80 py-1.5 font-tajawal flex items-center gap-1.5">
+                          <EyeOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>صورة مؤقتة ومحمية (في انتظار فتحها من الطرف الآخر)</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleTriggerSelfDestruct(msg.id)}
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-amber-600/30 active:scale-95 transition-all"
+                        >
+                          <Eye className="w-4 h-4" />
+                          <span>انقر للمشاهدة لمرة واحدة قبل تدميرها</span>
+                        </button>
+                      )}
+                    </div>
+                  ) : msg.isViewOnce ? (
+                    <div className="flex items-center gap-2 text-xs py-1.5 px-2 bg-black/40 rounded-xl border border-amber-500/30 font-tajawal">
                       <span className="w-5 h-5 rounded-full bg-amber-400/20 text-amber-300 font-black flex items-center justify-center text-[10px] border border-amber-400/40">
                         1
                       </span>
@@ -857,10 +973,13 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
           className="hidden"
         />
 
-        {/* View once toggle (when image or media chosen) */}
+        {/* View once toggle */}
         <button
           type="button"
-          onClick={() => setViewOnceEnabled(prev => !prev)}
+          onClick={() => {
+            setViewOnceEnabled(prev => !prev);
+            if (!viewOnceEnabled) setSelfDestructEnabled(false);
+          }}
           className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl flex items-center justify-center text-[10px] sm:text-xs font-black transition-all cursor-pointer shrink-0 active:scale-95 ${
             viewOnceEnabled
               ? 'bg-amber-500 text-black shadow-md shadow-amber-500/30 font-bold'
@@ -869,6 +988,24 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
           title={viewOnceEnabled ? 'العرض لمرة واحدة مفعّل ➀' : 'تفعيل العرض لمرة واحدة ➀'}
         >
           ➀
+        </button>
+
+        {/* Self destruct toggle */}
+        <button
+          type="button"
+          onClick={() => {
+            setSelfDestructEnabled(prev => !prev);
+            if (!selfDestructEnabled) setViewOnceEnabled(false);
+          }}
+          className={`px-2 py-1 rounded-lg sm:rounded-xl flex items-center gap-1 text-[10px] sm:text-xs font-bold transition-all cursor-pointer shrink-0 active:scale-95 ${
+            selfDestructEnabled
+              ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 font-bold border border-amber-400'
+              : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+          }`}
+          title={selfDestructEnabled ? 'التدمير الذاتي مفعّل (10 ثوانٍ)' : 'تفعيل التدمير الذاتي للصورة'}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">تدمير ذاتي</span>
         </button>
 
         {/* Image attach button */}
@@ -928,6 +1065,15 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
           <Send className="w-4 h-4" />
         </button>
       </form>
+      {/* Self Destruct Viewer Modal */}
+      {activeSelfDestruct && (
+        <SelfDestructModal
+          messageId={activeSelfDestruct.messageId}
+          mediaUrl={activeSelfDestruct.mediaUrl}
+          duration={activeSelfDestruct.duration}
+          onClose={handleCloseSelfDestruct}
+        />
+      )}
     </div>
   );
 };

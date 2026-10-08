@@ -94,24 +94,25 @@ function AppContent() {
       if (!targetUserId) return;
 
       try {
-        const res = await apiRequest<{ profile: any }>(`/users/${targetUserId}`);
-        if (res && res.profile) {
+        const res = await apiRequest<{ user?: any; profile?: any }>(`/users/${targetUserId}/profile`);
+        const p = res?.user || res?.profile;
+        if (p) {
           setOnlineChatTargetUser({
-            id: res.profile.id,
-            username: res.profile.username,
-            role: res.profile.role,
-            gender: res.profile.gender || 'male',
-            country: res.profile.country || 'السعودية',
-            bio: res.profile.bio || '',
-            avatarUrl: res.profile.avatarUrl || '',
-            level: res.profile.level || 0,
-            vipLevel: res.profile.vipLevel || 'none',
-            isOnline: !!res.profile.isOnline,
-            interests: res.profile.interests || [],
-            isPinned: !!res.profile.isPinned,
-            equippedBadge: res.profile.equippedBadge,
-            equippedFrame: res.profile.equippedFrame,
-            isGuest: !!res.profile.isGuest
+            id: p.id,
+            username: p.username,
+            role: p.role,
+            gender: p.gender || 'male',
+            country: p.country || 'السعودية',
+            bio: p.bio || '',
+            avatarUrl: p.avatar_url || p.avatarUrl || '',
+            level: p.level || 0,
+            vipLevel: p.vip_level || p.vipLevel || 'none',
+            isOnline: !!p.isOnline,
+            interests: p.interests || [],
+            isPinned: !!p.isPinned,
+            equippedBadge: p.equipped_badge || p.equippedBadge,
+            equippedFrame: p.equipped_frame || p.equippedFrame,
+            isGuest: !!p.isGuest
           });
           setCurrentTab('online');
           setSelectedProfileId(null);
@@ -174,32 +175,38 @@ function AppContent() {
     );
   }
 
-  const handleStartChatWithUser = async (targetUserId: string) => {
-    try {
-      const res = await apiRequest<{ profile: any }>(`/users/${targetUserId}`);
-      if (res && res.profile) {
-        setOnlineChatTargetUser({
-          id: res.profile.id,
-          username: res.profile.username,
-          gender: res.profile.gender || 'male',
-          country: res.profile.country || 'السعودية',
-          bio: res.profile.bio || '',
-          avatarUrl: res.profile.avatarUrl || '',
-          level: res.profile.level || 0,
-          vipLevel: res.profile.vipLevel || 'none',
-          isOnline: !!res.profile.isOnline,
-          interests: res.profile.interests || [],
-          isPinned: !!res.profile.isPinned,
-          equippedBadge: res.profile.equippedBadge,
-          equippedFrame: res.profile.equippedFrame,
-          isGuest: !!res.profile.isGuest
-        });
-        setSelectedProfileId(null);
-        setCurrentTab('online');
-        return;
+  const handleStartChatWithUser = async (targetUserId: string, passedProfile?: any) => {
+    let p = passedProfile;
+    if (!p) {
+      try {
+        const res = await apiRequest<{ user?: any; profile?: any }>(`/users/${targetUserId}/profile`);
+        p = res?.user || res?.profile;
+      } catch (e) {
+        console.error('Failed to load profile for side panel chat', e);
       }
-    } catch (e) {
-      console.error('Failed to load profile for side panel chat', e);
+    }
+
+    if (p) {
+      setOnlineChatTargetUser({
+        id: p.id,
+        username: p.username,
+        role: p.role,
+        gender: p.gender || 'male',
+        country: p.country || 'السعودية',
+        bio: p.bio || '',
+        avatarUrl: p.avatar_url || p.avatarUrl || '',
+        level: p.level || 0,
+        vipLevel: p.vip_level || p.vipLevel || 'none',
+        isOnline: !!p.isOnline,
+        interests: p.interests || [],
+        isPinned: !!p.isPinned,
+        equippedBadge: p.equipped_badge || p.equippedBadge,
+        equippedFrame: p.equipped_frame || p.equippedFrame,
+        isGuest: !!p.isGuest
+      });
+      setSelectedProfileId(null);
+      setCurrentTab('online');
+      return;
     }
 
     // Fallback: switch to online tab and close profile
@@ -225,68 +232,100 @@ function AppContent() {
 
       {/* Tab Routes */}
       {currentTab === 'online' && (
-        onlineChatTargetUser ? (
-          <>
-            {/* Desktop Side-by-Side: Online Users List alongside Chat Panel */}
-            <div className="hidden lg:grid lg:grid-cols-12 gap-5 items-start">
-              {/* Online Users Side List (Right in RTL) */}
-              <div className="lg:col-span-5 xl:col-span-4 space-y-3.5 sticky top-20">
-                <OnlineUsersPage
-                  onOpenProfile={(id) => setSelectedProfileId(id)}
-                  onStartChat={(targetUser) => setOnlineChatTargetUser(targetUser)}
-                  activeChatUserId={onlineChatTargetUser.id}
-                  compactGrid={true}
-                />
-              </div>
+        <>
+          {/* Desktop 3-Column Stationary Layout: [Main Sidebar] | [Column 2: Online Users List] | [Column 3: Content / Profile / Chat] */}
+          <div className="hidden lg:flex flex-row gap-3 xl:gap-4 h-full min-h-0 flex-1 overflow-hidden">
+            {/* Column 2: Online Users (المتواجدون حالياً) - Middle Column */}
+            <div className="w-[360px] xl:w-[410px] shrink-0 h-full min-h-0 flex flex-col overflow-hidden">
+              <OnlineUsersPage
+                onOpenProfile={(id) => {
+                  setSelectedProfileId(id);
+                }}
+                onStartChat={(targetUser) => {
+                  setOnlineChatTargetUser(targetUser);
+                }}
+                activeChatUserId={onlineChatTargetUser?.id}
+                selectedUserId={selectedProfileId}
+                compactGrid={true}
+                fillHeight={true}
+              />
+            </div>
 
-              {/* Chat Panel (Left in RTL - Main Area) */}
-              <div className="lg:col-span-7 xl:col-span-8 space-y-3">
-                <div className="flex items-center justify-between text-xs text-neutral-400 font-tajawal bg-[#090c13] p-2.5 rounded-2xl border border-neutral-800">
-                  <span className="font-bold text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    المحادثة مفتوحة بجانب قائمة المتواجدين حالياً
-                  </span>
-                  <button
-                    onClick={handleCloseOnlineChat}
-                    className="text-xs text-rose-400 hover:text-rose-300 font-bold transition-colors cursor-pointer"
-                  >
-                    إغلاق المحادثة الجانبية ✕
-                  </button>
-                </div>
+            {/* Column 3: Content / Profile / Chat (المحتوى / الملف / المحادثة) - Left in RTL */}
+            <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col">
+              {onlineChatTargetUser ? (
                 <OnlineChatPanel
                   targetUser={onlineChatTargetUser}
                   onClose={handleCloseOnlineChat}
                   onOpenProfile={(id) => setSelectedProfileId(id)}
                   isMobileModal={false}
                 />
-              </div>
+              ) : selectedProfileId ? (
+                <UserProfileModal
+                  userId={selectedProfileId}
+                  onClose={() => setSelectedProfileId(null)}
+                  onStartChat={handleStartChatWithUser}
+                  onOpenGifts={handleOpenGiftsForUser}
+                  embedded={true}
+                />
+              ) : (
+                <div className="h-full min-h-0 flex-1 bg-[#090d14]/90 border border-neutral-800 rounded-2xl sm:rounded-3xl p-8 flex flex-col items-center justify-center text-center space-y-5 shadow-xl select-none">
+                  <div className="w-16 h-16 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/20">
+                    <MessageSquareHeart className="w-8 h-8" />
+                  </div>
+                  <div className="space-y-1.5 max-w-md">
+                    <h2 className="text-xl font-cairo font-black text-white">
+                      محادثات فضفضه الفورية
+                    </h2>
+                    <p className="text-xs sm:text-sm text-neutral-400 font-tajawal leading-relaxed">
+                      اختر أي عضو من قائمة المتواجدين حالياً على اليمين لاستعراض ملفه الشخصي أو بدء محادثة فورية مشفرة وسريعة بجانب القائمة.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 pt-2">
+                    <div className="px-3.5 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-300 text-xs font-tajawal flex items-center gap-1.5">
+                      <span>🔒</span>
+                      <span>تشفير كامل وسرعة فائقة</span>
+                    </div>
+                    <div className="px-3.5 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-300 text-xs font-tajawal flex items-center gap-1.5">
+                      <span>⏱️</span>
+                      <span>صور ذاتية التدمير</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
+          </div>
 
-            {/* Small Screens / Mobile: Fullscreen Overlay with Back Button */}
-            <div className="block lg:hidden">
+          {/* Small Screens / Mobile: Stacked view */}
+          <div className="block lg:hidden h-full min-h-0 flex-1 overflow-y-auto">
+            {onlineChatTargetUser ? (
               <OnlineChatPanel
                 targetUser={onlineChatTargetUser}
                 onClose={handleCloseOnlineChat}
                 onOpenProfile={(id) => setSelectedProfileId(id)}
                 isMobileModal={true}
               />
-              {/* Preserves list state & scroll behind modal */}
-              <div className="hidden">
+            ) : (
+              <>
                 <OnlineUsersPage
                   onOpenProfile={(id) => setSelectedProfileId(id)}
                   onStartChat={(targetUser) => setOnlineChatTargetUser(targetUser)}
-                  activeChatUserId={onlineChatTargetUser.id}
+                  compactGrid={false}
+                  fillHeight={false}
                 />
-              </div>
-            </div>
-          </>
-        ) : (
-          <OnlineUsersPage
-            onOpenProfile={(id) => setSelectedProfileId(id)}
-            onStartChat={(targetUser) => setOnlineChatTargetUser(targetUser)}
-            compactGrid={false}
-          />
-        )
+                {selectedProfileId && (
+                  <UserProfileModal
+                    userId={selectedProfileId}
+                    onClose={() => setSelectedProfileId(null)}
+                    onStartChat={handleStartChatWithUser}
+                    onOpenGifts={handleOpenGiftsForUser}
+                    embedded={false}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </>
       )}
 
       {currentTab === 'rooms' && <RoomsPage />}
@@ -382,7 +421,7 @@ function AppContent() {
       )}
 
       {/* Global Modals */}
-      {selectedProfileId && (
+      {selectedProfileId && currentTab !== 'online' && (
         <UserProfileModal
           userId={selectedProfileId}
           onClose={() => setSelectedProfileId(null)}

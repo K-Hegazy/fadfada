@@ -2817,15 +2817,31 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req: Request, res
         const isViewOnce = m.is_view_once === 1;
         const isViewed = m.is_viewed === 1;
         let mediaUrl = m.media_url;
-        if (isViewOnce && isViewed) {
-          mediaUrl = ''; // Hide permanently once viewed
+        // Self-destruct and View-once protection: Raw mediaUrl is NEVER returned in chat history
+        if (isViewOnce || m.is_self_destruct === 1) {
+          mediaUrl = '';
+        }
+
+        let displayContent = m.content;
+        if (m.is_self_destruct === 1) {
+          if (m.is_destroyed === 1) {
+            displayContent = '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها';
+          } else {
+            displayContent = '⏳ صورة مؤقتة ذاتية التدمير';
+          }
+        } else if (isViewOnce) {
+          if (isViewed) {
+            displayContent = '⚠️ تم فتح الصورة لمرة واحدة وانتهت صلاحيتها';
+          } else {
+            displayContent = '📷 صورة تُعرض لمرة واحدة';
+          }
         }
 
         return {
           id: m.id,
           senderId: m.sender_id,
           recipientId: m.recipient_id,
-          content: m.is_destroyed === 1 ? '⚠️ تم تدمير هذه الصورة ذاتياً' : m.content,
+          content: m.is_destroyed === 1 ? '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها' : displayContent,
           type: m.type,
           mediaUrl: m.is_destroyed === 1 ? '' : mediaUrl,
           isRead: m.is_read === 1,
@@ -3190,37 +3206,58 @@ app.post('/api/messages/:id/view-self-destruct', requireAuth, async (req: Reques
     }
 
     if (msg.is_destroyed === 1) {
-      return res.status(410).json({ error: 'تم تدمير هذه الصورة بالفعل' });
+      return res.status(410).json({ error: 'تم فتح هذه الصورة مسبقاً وتدميرها نهائياً' });
+    }
+
+    if (msg.is_viewed === 1 && session.userId === msg.recipient_id) {
+      return res.status(410).json({ error: 'تم فتح هذه الصورة مسبقاً' });
     }
 
     const duration = msg.self_destruct_duration || 10; // seconds
+
+    // Mark as viewed immediately
+    db.run(
+      "UPDATE private_messages SET is_viewed = 1, viewed_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [msgId]
+    );
+    saveDb();
+
+    // Notify sender that the image was opened
+    sendToUser(msg.sender_id, {
+      type: 'message:self_destruct_opened',
+      messageId: msgId,
+      conversationId: msg.conversation_id,
+      viewedAt: new Date().toISOString()
+    });
 
     // Schedule server-side destruction
     setTimeout(async () => {
       try {
         const freshDb = await getDb();
-        const currentMsg = queryOne(freshDb, "SELECT media_url FROM private_messages WHERE id = ?", [msgId]);
-        if (currentMsg && currentMsg.media_url && currentMsg.media_url.startsWith('/uploads/')) {
-          const fn = path.basename(currentMsg.media_url);
-          const fp = path.join(UPLOAD_DIR, fn);
-          if (fs.existsSync(fp)) {
-            try { fs.unlinkSync(fp); } catch {}
+        const currentMsg = queryOne(freshDb, "SELECT media_url, is_destroyed FROM private_messages WHERE id = ?", [msgId]);
+        if (currentMsg && currentMsg.is_destroyed !== 1) {
+          if (currentMsg.media_url && currentMsg.media_url.startsWith('/uploads/')) {
+            const fn = path.basename(currentMsg.media_url);
+            const fp = path.join(UPLOAD_DIR, fn);
+            if (fs.existsSync(fp)) {
+              try { fs.unlinkSync(fp); } catch {}
+            }
           }
+
+          freshDb.run(
+            "UPDATE private_messages SET is_destroyed = 1, media_url = '', content = '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها', destroyed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [msgId]
+          );
+          saveDb();
+
+          const destroyedEvent = {
+            type: 'message:destroyed',
+            messageId: msgId,
+            conversationId: msg.conversation_id
+          };
+          sendToUser(msg.sender_id, destroyedEvent);
+          sendToUser(msg.recipient_id, destroyedEvent);
         }
-
-        freshDb.run(
-          "UPDATE private_messages SET is_destroyed = 1, media_url = '', content = '⚠️ تم تدمير الصورة ذاتياً', destroyed_at = CURRENT_TIMESTAMP WHERE id = ?",
-          [msgId]
-        );
-        saveDb();
-
-        const destroyedEvent = {
-          type: 'message:destroyed',
-          messageId: msgId,
-          conversationId: msg.conversation_id
-        };
-        sendToUser(msg.sender_id, destroyedEvent);
-        sendToUser(msg.recipient_id, destroyedEvent);
       } catch (e) {
         console.error('Destroy error:', e);
       }
@@ -3233,6 +3270,49 @@ app.post('/api/messages/:id/view-self-destruct', requireAuth, async (req: Reques
     });
   } catch (error) {
     return res.status(500).json({ error: 'خطأ في معالجة تدمير الصورة' });
+  }
+});
+
+// Immediate Destroy Endpoint for Self-Destruct or View-Once
+app.post('/api/messages/:id/destroy-now', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const msgId = req.params.id;
+    const db = await getDb();
+
+    const msg = queryOne(
+      db,
+      "SELECT * FROM private_messages WHERE id = ? AND (sender_id = ? OR recipient_id = ?)",
+      [msgId, session.userId, session.userId]
+    );
+
+    if (msg) {
+      if (msg.media_url && msg.media_url.startsWith('/uploads/')) {
+        const fn = path.basename(msg.media_url);
+        const fp = path.join(UPLOAD_DIR, fn);
+        if (fs.existsSync(fp)) {
+          try { fs.unlinkSync(fp); } catch {}
+        }
+      }
+
+      db.run(
+        "UPDATE private_messages SET is_destroyed = 1, is_viewed = 1, media_url = '', content = '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها', destroyed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [msgId]
+      );
+      saveDb();
+
+      const destroyedEvent = {
+        type: 'message:destroyed',
+        messageId: msgId,
+        conversationId: msg.conversation_id
+      };
+      sendToUser(msg.sender_id, destroyedEvent);
+      sendToUser(msg.recipient_id, destroyedEvent);
+    }
+
+    return res.json({ success: true });
+  } catch (e) {
+    return res.json({ success: true });
   }
 });
 
@@ -4889,7 +4969,8 @@ app.post('/api/assistant/chat', async (req: Request, res: Response) => {
 // Media Upload
 app.post('/api/upload', requireAuth, uploadRateLimiter, async (req: Request, res: Response) => {
   try {
-    const { dataUrl, fileType, fileName } = req.body;
+    const dataUrl = req.body.dataUrl || req.body.mediaBase64;
+    const { fileType, fileName } = req.body;
     if (!dataUrl || !dataUrl.includes('base64,')) {
       return res.status(400).json({ error: 'ملف غير صالح' });
     }

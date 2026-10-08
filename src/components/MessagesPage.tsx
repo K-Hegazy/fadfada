@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { ConversationItem, PrivateMessage } from '../types';
 import { GiftsModal } from './GiftsModal';
 import { OwnerBadge, isUserOwner } from './OwnerBadge';
+import { SelfDestructModal } from './SelfDestructModal';
 import {
   Send,
   Image,
@@ -63,6 +64,11 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     type: string;
   } | null>(null);
   const [openingViewOnce, setOpeningViewOnce] = useState<string | null>(null);
+  const [activeSelfDestruct, setActiveSelfDestruct] = useState<{
+    messageId: string;
+    mediaUrl: string;
+    duration: number;
+  } | null>(null);
 
   // Voice recording states
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -577,12 +583,39 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   // Trigger Self-Destruct view
   const handleTriggerSelfDestruct = async (msgId: string) => {
     try {
-      const res = await apiRequest(`/messages/${msgId}/view-self-destruct`, {
-        method: 'POST'
-      });
-      alert(`هذه الصورة ستتدمر ذاتياً بعد ${res.duration} ثوانٍ!`);
+      const res = await apiRequest<{ success: boolean; duration: number; mediaUrl: string }>(
+        `/messages/${msgId}/view-self-destruct`,
+        { method: 'POST' }
+      );
+      if (res && res.mediaUrl) {
+        setActiveSelfDestruct({
+          messageId: msgId,
+          mediaUrl: res.mediaUrl,
+          duration: res.duration || 10
+        });
+      }
     } catch (err: any) {
-      alert(err.message || 'خطأ في عرض الصورة المؤقتة');
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === msgId
+            ? { ...m, isDestroyed: true, mediaUrl: '', content: '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها' }
+            : m
+        )
+      );
+    }
+  };
+
+  const handleCloseSelfDestruct = () => {
+    if (activeSelfDestruct) {
+      const destroyedId = activeSelfDestruct.messageId;
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === destroyedId
+            ? { ...m, isDestroyed: true, mediaUrl: '', content: '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها' }
+            : m
+        )
+      );
+      setActiveSelfDestruct(null);
     }
   };
 
@@ -932,37 +965,33 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                           )}
                         </div>
                       ) : m.isSelfDestruct ? (
-                        /* Self-Destructing Image Message */
-                        <div className="p-3 rounded-xl bg-black/40 border border-amber-500/40 space-y-2">
-                          <div className="flex items-center justify-between text-xs text-amber-300 font-bold">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3.5 h-3.5" />
+                        /* Self-Destructing Image Message - No thumbnail ever exposed */
+                        <div className="p-3 rounded-2xl bg-black/50 border border-amber-500/40 space-y-2 max-w-sm">
+                          <div className="flex items-center justify-between text-xs text-amber-300 font-bold font-cairo">
+                            <span className="flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 text-amber-400" />
                               صورة ذاتية التدمير ({m.selfDestructDuration || 10} ثوانٍ)
                             </span>
                           </div>
 
                           {m.isDestroyed ? (
-                            <div className="text-xs text-rose-400 font-semibold py-2">
-                              ⚠️ تم تدمير هذه الصورة ذاتياً وانتهت صلاحيتها نهائياً.
+                            <div className="text-xs text-rose-400 font-semibold py-1.5 flex items-center gap-1.5 font-tajawal">
+                              <span>⚠️ تم فتح هذه الصورة ذاتياً وانتهت صلاحيتها نهائياً.</span>
+                            </div>
+                          ) : isMine ? (
+                            <div className="text-xs text-amber-200/80 py-1.5 font-tajawal flex items-center gap-1.5">
+                              <EyeOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <span>صورة مؤقتة ومحمية (في انتظار فتحها من الطرف الآخر)</span>
                             </div>
                           ) : (
-                            <div className="space-y-2">
-                              {m.mediaUrl ? (
-                                <img
-                                  src={m.mediaUrl}
-                                  alt="Self destructing media"
-                                  className="rounded-lg max-h-60 object-cover w-full"
-                                />
-                              ) : (
-                                <button
-                                  onClick={() => handleTriggerSelfDestruct(m.id)}
-                                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                  <span>انقر للمشاهدة قبل تدميرها</span>
-                                </button>
-                              )}
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleTriggerSelfDestruct(m.id)}
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-amber-600/30 active:scale-95 transition-all"
+                            >
+                              <Eye className="w-4 h-4" />
+                              <span>انقر للمشاهدة لمرة واحدة قبل تدميرها</span>
+                            </button>
                           )}
                         </div>
                       ) : m.type === 'image' && m.mediaUrl ? (
@@ -1249,6 +1278,16 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             fetchConversations();
             loadMessages(activeConvId!);
           }}
+        />
+      )}
+
+      {/* Self Destruct Viewer Modal */}
+      {activeSelfDestruct && (
+        <SelfDestructModal
+          messageId={activeSelfDestruct.messageId}
+          mediaUrl={activeSelfDestruct.mediaUrl}
+          duration={activeSelfDestruct.duration}
+          onClose={handleCloseSelfDestruct}
         />
       )}
     </div>
