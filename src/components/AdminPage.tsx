@@ -58,6 +58,11 @@ export const AdminPage: React.FC = () => {
   const [coinsReason, setCoinsReason] = useState<string>('مكافأة تقديرية من المالك');
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
 
+  // Coin Packages states
+  const [adminCoinPackages, setAdminCoinPackages] = useState<any[]>([]);
+  const [editingCoinPackage, setEditingCoinPackage] = useState<any | null>(null);
+  const [newPackageModalOpen, setNewPackageModalOpen] = useState<boolean>(false);
+
   // VIP Plans states
   const [vipPlansList, setVipPlansList] = useState<any[]>([]);
   const [editingVipPlan, setEditingVipPlan] = useState<any | null>(null);
@@ -145,6 +150,15 @@ export const AdminPage: React.FC = () => {
     }
   };
 
+  const fetchCoinPackages = async () => {
+    try {
+      const res = await apiRequest('/admin/coins/packages');
+      setAdminCoinPackages(res.packages || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const fetchVipPlans = async () => {
     try {
       setLoading(true);
@@ -206,6 +220,7 @@ export const AdminPage: React.FC = () => {
     if (activeTab === 'users') fetchUsers();
     if (activeTab === 'wallet') {
       fetchEconomyStats();
+      fetchCoinPackages();
       fetchUsers();
     }
     if (activeTab === 'vip') {
@@ -513,6 +528,61 @@ export const AdminPage: React.FC = () => {
       fetchVipPlans();
     } catch (err: any) {
       alert(err.message || 'فشل حذف باقة VIP');
+    }
+  };
+
+  // Owner Save Coin Package (Create or Update)
+  const handleSaveCoinPackage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+
+    const pkgData = {
+      id: (formData.get('id') as string)?.trim(),
+      name: (formData.get('name') as string)?.trim(),
+      coins: Number(formData.get('coins')) || 0,
+      bonusCoins: Number(formData.get('bonusCoins')) || 0,
+      priceAmount: Number(formData.get('priceAmount')) || 0,
+      currency: (formData.get('currency') as string)?.trim() || 'SAR',
+      icon: (formData.get('icon') as string)?.trim() || '🪙',
+      badge: (formData.get('badge') as string)?.trim() || '',
+      popular: formData.get('popular') === 'on' || formData.get('popular') === '1',
+      isActive: formData.get('isActive') === 'on' || formData.get('isActive') === '1',
+      displayOrder: Number(formData.get('displayOrder')) || 0
+    };
+
+    try {
+      if (editingCoinPackage) {
+        await apiRequest(`/admin/coins/packages/${editingCoinPackage.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(pkgData)
+        });
+        showNotification('تم تحديث بيانات باقة الكوينز بنجاح');
+      } else {
+        await apiRequest('/admin/coins/packages', {
+          method: 'POST',
+          body: JSON.stringify(pkgData)
+        });
+        showNotification('تمت إضافة باقة الكوينز الجديدة بنجاح');
+      }
+      setNewPackageModalOpen(false);
+      setEditingCoinPackage(null);
+      fetchCoinPackages();
+      fetchEconomyStats();
+    } catch (err: any) {
+      showNotification(err.message || 'فشل حفظ باقة الكوينز');
+    }
+  };
+
+  // Owner Delete Coin Package
+  const handleDeleteCoinPackage = async (pkgId: string, pkgName: string) => {
+    try {
+      await apiRequest(`/admin/coins/packages/${pkgId}`, { method: 'DELETE' });
+      showNotification(`تم حذف باقة "${pkgName}" بنجاح`);
+      fetchCoinPackages();
+      fetchEconomyStats();
+    } catch (err: any) {
+      showNotification(err.message || 'فشل حذف الباقة');
     }
   };
 
@@ -918,16 +988,16 @@ export const AdminPage: React.FC = () => {
       {activeTab === 'wallet' && isOwner && (
         <div className="space-y-6">
           {/* Economy overview stats */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-5 rounded-3xl bg-[#0e1017] border border-amber-900/40 relative overflow-hidden">
               <div className="flex items-center justify-between text-xs text-neutral-400 font-tajawal mb-2">
-                <span>إجمالي الكوينز المتداولة بالمنصة</span>
+                <span>إجمالي الكوينز المتداولة</span>
                 <Coins className="w-4 h-4 text-amber-400" />
               </div>
               <div className="text-3xl font-black font-cairo text-amber-400">
-                {economyStats?.totalCoins || 0}
+                {(economyStats?.totalCoins || 0).toLocaleString('ar-EG')}
               </div>
-              <p className="text-[11px] text-neutral-500 mt-1 font-tajawal">مجموع أرصدة كافة حسابات الأعضاء في قاعدة البيانات</p>
+              <p className="text-[11px] text-neutral-500 mt-1 font-tajawal">مجموع أرصدة كافة حسابات الأعضاء الحالية</p>
             </div>
 
             <div className="p-5 rounded-3xl bg-[#0e1017] border border-purple-900/40">
@@ -943,26 +1013,157 @@ export const AdminPage: React.FC = () => {
               </p>
             </div>
 
+            <div className="p-5 rounded-3xl bg-[#0e1017] border border-cyan-900/40">
+              <div className="flex items-center justify-between text-xs text-neutral-400 font-tajawal mb-2">
+                <span>إجمالي استهلاك الهدايا والمتجر</span>
+                <Sparkles className="w-4 h-4 text-cyan-400" />
+              </div>
+              <div className="text-2xl font-black font-cairo text-cyan-300">
+                {(economyStats?.totalGiftsCount || 0) + (economyStats?.totalShopPurchases?.count || 0)} حركة
+              </div>
+              <p className="text-[11px] text-neutral-500 mt-1 font-tajawal">
+                {economyStats?.totalGiftsCount || 0} هدايا · {economyStats?.totalShopPurchases?.count || 0} مقتنيات شارات
+              </p>
+            </div>
+
             <div className="p-5 rounded-3xl bg-[#0e1017] border border-emerald-900/40">
               <div className="flex items-center justify-between text-xs text-neutral-400 font-tajawal mb-2">
-                <span>إجراء سريع للمالك</span>
-                <Sparkles className="w-4 h-4 text-emerald-400" />
+                <span>محاكاة الشحن التجريبي (Sandbox)</span>
+                <Zap className="w-4 h-4 text-emerald-400" />
               </div>
-              <p className="text-xs text-neutral-300 font-tajawal mb-3">
-                اضغط على أي مستخدم بالجدول لتعديل محفظته مباشرة أو إضافة كوينز كهدية.
+              <div className="text-2xl font-black font-cairo text-emerald-300">
+                +{((economyStats?.totalRecharges?.total) || 0).toLocaleString('ar-EG')} كوينز
+              </div>
+              <p className="text-[11px] text-neutral-500 mt-1 font-tajawal">
+                {economyStats?.totalRecharges?.count || 0} عمليات شحن تجريبية مسجلة
               </p>
-              <button
-                onClick={() => {
-                  if (usersList.length > 0) {
-                    setWalletTargetUser(usersList[0]);
-                  }
-                }}
-                className="w-full py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-neutral-950 font-bold text-xs cursor-pointer shadow-md"
-              >
-                فتح نافذة تعديل رصيد مستخدم
-              </button>
             </div>
           </div>
+
+          {/* Quick Owner Wallet Action Bar */}
+          <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-800/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <Wallet className="w-5 h-5 text-amber-400 shrink-0" />
+              <div>
+                <h4 className="font-cairo font-bold text-xs text-white">إدارة المحافظ والشحن اليدوي الفوري</h4>
+                <p className="text-[11px] text-neutral-400 font-tajawal">يمكنك كمالك للمنصة إضافة أو خصم كوينز لأي حساب فورياً من جدول المستخدمين أدناه.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                if (usersList.length > 0) {
+                  setWalletTargetUser(usersList[0]);
+                  setCoinsAmount(100);
+                  setCoinsOperation('add');
+                }
+              }}
+              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-neutral-950 font-black text-xs cursor-pointer shadow-md shrink-0 flex items-center justify-center gap-1.5"
+            >
+              <Coins className="w-3.5 h-3.5" />
+              <span>تعديل رصيد مستخدم الآن</span>
+            </button>
+          </div>
+
+          {/* COIN PACKAGES MANAGEMENT (إدارة باقات شحن الكوينز) */}
+          <div className="space-y-4 rounded-3xl bg-[#0e1017] border border-neutral-800 p-5 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800/80">
+              <div>
+                <h3 className="font-cairo font-bold text-base text-white flex items-center gap-2">
+                  <Coins className="w-5 h-5 text-amber-400" />
+                  <span>إدارة باقات شحن الكوينز (Coin Packages)</span>
+                </h3>
+                <p className="text-xs text-neutral-400 font-tajawal">
+                  تحديد أسعار الباقات بالريال السعودي أو العملات المعتمدة، كميات الكوينز، والبونص المجاني. تنعكس التعديلات لحظياً في المحفظة والمتجر.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setEditingCoinPackage(null);
+                  setNewPackageModalOpen(true);
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-neutral-950 font-black text-xs flex items-center gap-1.5 shadow-md cursor-pointer shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة باقة جديدة</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5">
+              {adminCoinPackages.map((pkg) => (
+                <div
+                  key={pkg.id}
+                  className={`p-4 rounded-2xl border bg-neutral-900/80 flex flex-col justify-between space-y-3 relative overflow-hidden ${
+                    pkg.isActive ? 'border-neutral-800' : 'border-neutral-800/50 opacity-60'
+                  }`}
+                >
+                  {pkg.badge && (
+                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 self-start">
+                      {pkg.badge}
+                    </span>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <div className="text-3xl">{pkg.icon || '🪙'}</div>
+                    <h4 className="font-cairo font-black text-sm text-white">{pkg.name}</h4>
+                    <div className="text-xs text-amber-400 font-cairo font-bold">
+                      {pkg.coins.toLocaleString()} كوينز
+                      {pkg.bonusCoins > 0 && <span className="text-emerald-400 font-normal"> (+{pkg.bonusCoins} بونص)</span>}
+                    </div>
+                    <div className="text-xs text-neutral-300 font-cairo">
+                      السعر: <strong className="text-white">{pkg.priceAmount}</strong> {pkg.currency}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-neutral-800/80 flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setEditingCoinPackage(pkg);
+                        setNewPackageModalOpen(true);
+                      }}
+                      className="flex-1 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <Edit3 className="w-3 h-3 text-amber-400" />
+                      <span>تعديل</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteCoinPackage(pkg.id, pkg.name)}
+                      className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/60 text-xs cursor-pointer"
+                      title="حذف الباقة"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* TOP GIFTS ANALYTICS */}
+          {economyStats?.topGifts && economyStats.topGifts.length > 0 && (
+            <div className="space-y-3 rounded-3xl bg-[#0e1017] border border-neutral-800 p-5 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h3 className="font-cairo font-bold text-sm text-white flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-pink-400" />
+                  <span>الهدايا الأكثر إرسالاً وتداولاً بين الأعضاء</span>
+                </h3>
+                <span className="text-xs text-neutral-500 font-tajawal">مؤشر رواج الهدايا في الدردشات</span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                {economyStats.topGifts.map((gift: any) => (
+                  <div key={gift.id} className="p-3 rounded-2xl bg-neutral-900/60 border border-neutral-800 text-center space-y-1">
+                    <div className="text-2xl">{gift.icon || '🎁'}</div>
+                    <div className="font-cairo font-bold text-xs text-white truncate">{gift.arabic_name || gift.name}</div>
+                    <div className="text-[10px] text-amber-400 font-cairo">{gift.price_coins} كوينز</div>
+                    <div className="text-[10px] text-emerald-400 font-tajawal bg-emerald-950/40 py-0.5 rounded-md border border-emerald-800/40">
+                      أُرسلت {gift.send_count || 0} مرة
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Top Wallets & Recent Transactions */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2235,6 +2436,178 @@ export const AdminPage: React.FC = () => {
                   className="w-2/3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-neutral-950 font-bold text-xs shadow-md cursor-pointer"
                 >
                   إنشاء الباقة وتفعيلها
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 6: OWNER CREATE / EDIT COIN PACKAGE */}
+      {(newPackageModalOpen || editingCoinPackage) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-3xl bg-[#0e1017] border border-amber-800/80 p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2 font-cairo font-bold text-base text-white">
+                <Coins className="w-5 h-5 text-amber-400" />
+                <span>{editingCoinPackage ? 'تعديل باقة شحن الكوينز' : 'إضافة باقة شحن كوينز جديدة'}</span>
+              </div>
+              <button
+                onClick={() => {
+                  setNewPackageModalOpen(false);
+                  setEditingCoinPackage(null);
+                }}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCoinPackage} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">معرف الباقة البرمجي (ID)</label>
+                <input
+                  name="id"
+                  type="text"
+                  defaultValue={editingCoinPackage?.id || `pkg_${Date.now()}`}
+                  disabled={!!editingCoinPackage}
+                  placeholder="مثال: pkg_starter"
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white disabled:opacity-50"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">اسم الباقة الظاهر</label>
+                <input
+                  name="name"
+                  type="text"
+                  defaultValue={editingCoinPackage?.name || ''}
+                  placeholder="مثال: باقة النخبة (Elite Plus)"
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">عدد الكوينز الأساسي</label>
+                  <input
+                    name="coins"
+                    type="number"
+                    min={1}
+                    defaultValue={editingCoinPackage?.coins || 500}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white font-bold"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">بونص مجاني إضافي</label>
+                  <input
+                    name="bonusCoins"
+                    type="number"
+                    min={0}
+                    defaultValue={editingCoinPackage?.bonusCoins || 0}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">السعر التقديري</label>
+                  <input
+                    name="priceAmount"
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    defaultValue={editingCoinPackage?.priceAmount || 25}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white font-bold"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">العملة</label>
+                  <input
+                    name="currency"
+                    type="text"
+                    defaultValue={editingCoinPackage?.currency || 'SAR'}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white font-bold"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">الأيقونة (Emoji)</label>
+                  <input
+                    name="icon"
+                    type="text"
+                    defaultValue={editingCoinPackage?.icon || '🪙'}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">شارة ترويجية (Badge)</label>
+                  <input
+                    name="badge"
+                    type="text"
+                    defaultValue={editingCoinPackage?.badge || ''}
+                    placeholder="مثال: الأكثر طلباً 🔥"
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">ترتيب العرض</label>
+                  <input
+                    name="displayOrder"
+                    type="number"
+                    defaultValue={editingCoinPackage?.displayOrder || 1}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white"
+                  />
+                </div>
+                <div className="flex items-center gap-4 pt-5">
+                  <label className="flex items-center gap-1.5 text-xs text-neutral-300 cursor-pointer">
+                    <input
+                      name="popular"
+                      type="checkbox"
+                      defaultChecked={editingCoinPackage?.popular}
+                      className="rounded bg-neutral-900 text-amber-500"
+                    />
+                    <span>مميزة</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-neutral-300 cursor-pointer">
+                    <input
+                      name="isActive"
+                      type="checkbox"
+                      defaultChecked={editingCoinPackage ? editingCoinPackage.isActive : true}
+                      className="rounded bg-neutral-900 text-amber-500"
+                    />
+                    <span>نشطة</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewPackageModalOpen(false);
+                    setEditingCoinPackage(null);
+                  }}
+                  className="w-1/3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 font-bold text-xs cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="w-2/3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-neutral-950 font-black text-xs shadow-md cursor-pointer"
+                >
+                  {editingCoinPackage ? 'حفظ التعديلات' : 'إضافة الباقة وتفعيلها'}
                 </button>
               </div>
             </form>

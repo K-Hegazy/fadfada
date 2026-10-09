@@ -21,18 +21,20 @@ import {
   RefreshCw,
   Zap
 } from 'lucide-react';
-import { ShopItem, UserInventoryItem } from '../types';
+import { ShopItem, UserInventoryItem, CoinPackage } from '../types';
 
 export const ShopPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
   const token = getToken();
-  const [activeTab, setActiveTab] = useState<'badges' | 'features' | 'memberships' | 'inventory' | 'admin'>('badges');
+  const [activeTab, setActiveTab] = useState<'badges' | 'features' | 'memberships' | 'coins' | 'inventory' | 'admin'>('badges');
   const [items, setItems] = useState<ShopItem[]>([]);
   const [inventory, setInventory] = useState<UserInventoryItem[]>([]);
   const [vipPlans, setVipPlans] = useState<any[]>([]);
+  const [coinPackages, setCoinPackages] = useState<CoinPackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [purchasingId, setPurchasingId] = useState<string | null>(null);
   const [purchasingVipTier, setPurchasingVipTier] = useState<string | null>(null);
+  const [purchasingPackageId, setPurchasingPackageId] = useState<string | null>(null);
   const [equippingId, setEquippingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
@@ -61,10 +63,11 @@ export const ShopPage: React.FC = () => {
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const [resCatalog, resInv, resVip] = await Promise.all([
+      const [resCatalog, resInv, resVip, resCoins] = await Promise.all([
         fetch('/api/shop/items', { headers }),
         token && !user?.isGuest ? fetch('/api/shop/my-inventory', { headers }) : Promise.resolve(null),
-        fetch('/api/vip/plans')
+        fetch('/api/vip/plans'),
+        fetch('/api/coins/packages')
       ]);
 
       if (resCatalog.ok) {
@@ -81,10 +84,47 @@ export const ShopPage: React.FC = () => {
         const vipData = await resVip.json();
         setVipPlans(vipData.plans || []);
       }
+
+      if (resCoins && resCoins.ok) {
+        const coinData = await resCoins.json();
+        setCoinPackages(coinData.packages || []);
+      }
     } catch (err) {
       console.error('Failed to load shop items', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSimulateRecharge = async (pkg: CoinPackage) => {
+    if (!token || user?.isGuest) {
+      setMessage({ text: 'شحن الكوينز متاح فقط للأعضاء المسجلين. يرجى تسجيل حسابك أولاً!', type: 'error' });
+      return;
+    }
+
+    setPurchasingPackageId(pkg.id);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/coins/purchase', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ packageId: pkg.id })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage({ text: data.error || 'فشلت عملية الشحن التجريبي', type: 'error' });
+      } else {
+        setMessage({ text: data.message || `تم شحن ${pkg.coins + (pkg.bonusCoins || 0)} كوينز بنجاح في الوضع التجريبي! ✨`, type: 'success' });
+        await fetchShopData();
+        if (refreshUser) await refreshUser();
+      }
+    } catch (err) {
+      setMessage({ text: 'حدث خطأ في الاتصال بالخادم', type: 'error' });
+    } finally {
+      setPurchasingPackageId(null);
     }
   };
 
@@ -307,16 +347,13 @@ export const ShopPage: React.FC = () => {
                 سجّل حسابك لاقتناء الشارات
               </div>
             ) : (
-              <a
-                href="#wallet"
-                onClick={(e) => {
-                  e.preventDefault();
-                  window.dispatchEvent(new CustomEvent('navigate-tab', { detail: 'wallet' }));
-                }}
-                className="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-neutral-950 text-xs font-black rounded-xl text-center shadow-md transition-all cursor-pointer active:scale-95"
+              <button
+                onClick={() => setActiveTab('coins')}
+                className="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-neutral-950 text-xs font-black rounded-xl text-center shadow-md transition-all cursor-pointer active:scale-95 flex items-center gap-1.5"
               >
-                شحن أو كسب كوينز
-              </a>
+                <Coins className="w-3.5 h-3.5" />
+                <span>شحن أو كسب كوينز</span>
+              </button>
             )}
           </div>
         </div>
@@ -345,9 +382,22 @@ export const ShopPage: React.FC = () => {
         </div>
       )}
 
-      {/* 3 Dedicated Main Store Sections: Badges, Features, Memberships */}
+      {/* Main Store Sections: Coins, Badges, Features, Memberships */}
       <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3 flex-wrap gap-3">
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar max-w-full pb-1">
+          {/* Section 0: Coins Recharge */}
+          <button
+            onClick={() => setActiveTab('coins')}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer shrink-0 active:scale-95 ${
+              activeTab === 'coins'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                : 'bg-neutral-900/60 text-neutral-400 hover:text-white border border-neutral-800'
+            }`}
+          >
+            <Coins className="w-4 h-4 text-amber-400" />
+            <span>شحن الكوينز</span>
+          </button>
+
           {/* Section 1: Badges */}
           <button
             onClick={() => setActiveTab('badges')}
@@ -418,6 +468,108 @@ export const ShopPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* COINS PACKAGES VIEW */}
+      {activeTab === 'coins' && (
+        <div className="space-y-6">
+          <div className="p-4 sm:p-5 rounded-2xl sm:rounded-3xl bg-neutral-900/90 border border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+                <Zap className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 font-cairo font-bold text-sm text-white">
+                  <span>باقات شحن الكوينز (الوضع التجريبي الآمن Sandbox)</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
+                    جاهز للتكامل
+                  </span>
+                </div>
+                <p className="text-xs text-neutral-300 font-tajawal leading-relaxed">
+                  اختر أي باقة لتجربة شحن رصيدك فورياً واختبار شراء الشارات والعضويات الملكية وإهداء الأصدقاء. لا يتم خصم أموال حقيقية حالياً.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-neutral-400 font-tajawal shrink-0 bg-black/40 px-3 py-2 rounded-xl border border-neutral-800">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>نظام شحن كوينز جاهز للبوابات المالية</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            {coinPackages.map((pkg) => {
+              const isBuying = purchasingPackageId === pkg.id;
+              const totalCoins = pkg.coins + (pkg.bonusCoins || 0);
+
+              return (
+                <div
+                  key={pkg.id}
+                  className={`p-5 rounded-3xl border flex flex-col justify-between space-y-4 shadow-xl relative overflow-hidden transition-all hover:scale-[1.02] ${
+                    pkg.popular
+                      ? 'bg-gradient-to-b from-amber-950/80 via-neutral-900 to-[#0e1017] border-amber-500/80 shadow-amber-950/40 ring-1 ring-amber-500/40'
+                      : 'bg-gradient-to-b from-neutral-900 via-neutral-900/90 to-[#0e1017] border-neutral-800 hover:border-neutral-700'
+                  }`}
+                >
+                  {pkg.badge && (
+                    <div className="absolute top-3 left-3">
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500 text-neutral-950 shadow-md">
+                        {pkg.badge}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <div className="text-4xl">{pkg.icon || '🪙'}</div>
+                    <div>
+                      <h3 className="font-cairo font-black text-base text-white">{pkg.name}</h3>
+                      <div className="flex items-baseline gap-1.5 mt-1">
+                        <span className="font-cairo font-black text-2xl text-amber-400">
+                          {totalCoins.toLocaleString('ar-EG')}
+                        </span>
+                        <span className="text-xs text-neutral-400 font-tajawal">كوينز</span>
+                      </div>
+                      {pkg.bonusCoins > 0 && (
+                        <div className="text-[11px] font-bold text-emerald-400 mt-1 font-tajawal">
+                          + {pkg.bonusCoins.toLocaleString('ar-EG')} كوينز بونص!
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-black/40 border border-neutral-800 text-center space-y-0.5">
+                      <span className="text-[11px] text-neutral-400 font-tajawal block">السعر التقديري</span>
+                      <span className="font-cairo font-bold text-sm text-white">
+                        {pkg.priceAmount} {pkg.currency === 'SAR' ? 'ريال' : pkg.currency}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    disabled={isBuying}
+                    onClick={() => handleSimulateRecharge(pkg)}
+                    className={`w-full py-2.5 px-3 rounded-xl font-black text-xs transition-all cursor-pointer shadow-md flex items-center justify-center gap-1.5 active:scale-95 ${
+                      pkg.popular
+                        ? 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-neutral-950'
+                        : 'bg-white hover:bg-neutral-100 text-neutral-950'
+                    }`}
+                  >
+                    {isBuying ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>جاري الشحن...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>شحن تجريبي فوراً</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ITEMS VIEW (Badges or Features) */}
       {(activeTab === 'badges' || activeTab === 'features') && (

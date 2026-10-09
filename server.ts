@@ -4116,6 +4116,90 @@ app.post('/api/gifts/send', requireAuth, giftRateLimiter, async (req: Request, r
   }
 });
 
+// ==========================================
+// COIN PACKAGES & MONETIZATION SIMULATION
+// ==========================================
+
+// Get Active Coin Packages
+app.get('/api/coins/packages', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const rows = queryAll(db, "SELECT * FROM coin_packages WHERE is_active = 1 ORDER BY display_order ASC, price_amount ASC");
+    const packages = rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      coins: r.coins,
+      bonusCoins: r.bonus_coins,
+      priceAmount: r.price_amount,
+      currency: r.currency || 'SAR',
+      icon: r.icon || '🪙',
+      badge: r.badge || '',
+      color: r.color || 'from-amber-600 to-amber-900',
+      popular: r.popular === 1,
+      isActive: r.is_active === 1,
+      displayOrder: r.display_order
+    }));
+    return res.json({ packages });
+  } catch (error) {
+    console.error('Fetch coin packages error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب باقات الكوينز' });
+  }
+});
+
+// Purchase / Recharge Coins Package (Sandbox Simulation - الوضع التجريبي دون خصم أموال حقيقية)
+app.post('/api/coins/purchase', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.isGuest) {
+      return res.status(403).json({ error: 'شحن الكوينز متاح فقط للحسابات المسجلة. يرجى إنشاء حساب مجاني أو تسجيل الدخول!' });
+    }
+    const { packageId } = req.body;
+    if (!packageId) {
+      return res.status(400).json({ error: 'يرجى تحديد باقة الكوينز المطلوبة' });
+    }
+
+    const db = await getDb();
+    const pkg = queryOne(db, "SELECT * FROM coin_packages WHERE id = ? AND is_active = 1", [packageId]);
+    if (!pkg) {
+      return res.status(404).json({ error: 'باقة الكوينز المطلوبة غير متاحة حالياً' });
+    }
+
+    const totalCoinsToAdd = (pkg.coins || 0) + (pkg.bonus_coins || 0);
+    const txId = 'tx_' + Math.random().toString(36).substring(2, 9);
+    const description = `شحن رصيد: ${pkg.name} (+${totalCoinsToAdd} كوينز) [محاكاة تجريبية]`;
+
+    db.run("BEGIN TRANSACTION");
+    try {
+      db.run("UPDATE users SET coins = coins + ? WHERE id = ?", [totalCoinsToAdd, session.userId]);
+      db.run(
+        "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'coin_recharge_sim', ?)",
+        [txId, session.userId, totalCoinsToAdd, description]
+      );
+      addXp(db, session.userId, Math.min(150, Math.floor(totalCoinsToAdd * 0.1)));
+      db.run("COMMIT");
+    } catch (txErr) {
+      db.run("ROLLBACK");
+      throw txErr;
+    }
+
+    saveDb();
+
+    // Broadcast presence update if needed
+    broadcastOnlineStatus(session.userId, true);
+
+    const updatedUser = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
+    return res.json({
+      success: true,
+      message: `مبروك! تم شحن ${totalCoinsToAdd.toLocaleString('ar-EG')} كوينز بنجاح في الوضع التجريبي. رصيدك الآن: ${(updatedUser?.coins || 0).toLocaleString('ar-EG')} كوينز`,
+      coins: updatedUser?.coins || 0,
+      coinsAdded: totalCoinsToAdd
+    });
+  } catch (error) {
+    console.error('Coin recharge simulation error:', error);
+    return res.status(500).json({ error: 'حدث خطأ أثناء تنفيذ عملية الشحن التجريبية' });
+  }
+});
+
 // VIP Membership Plans List (Dynamic from database)
 app.get('/api/vip/plans', async (req: Request, res: Response) => {
   try {
@@ -5706,6 +5790,130 @@ app.post('/api/admin/users/:id/gamification', requireAuth, requireOwner, async (
   }
 });
 
+// Admin/Owner: Get All Coin Packages
+app.get('/api/admin/coins/packages', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const rows = queryAll(db, "SELECT * FROM coin_packages ORDER BY display_order ASC, price_amount ASC");
+    const packages = rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      coins: r.coins,
+      bonusCoins: r.bonus_coins,
+      priceAmount: r.price_amount,
+      currency: r.currency || 'SAR',
+      icon: r.icon || '🪙',
+      badge: r.badge || '',
+      color: r.color || 'from-amber-600 to-amber-900',
+      popular: r.popular === 1,
+      isActive: r.is_active === 1,
+      displayOrder: r.display_order,
+      createdAt: r.created_at
+    }));
+    return res.json({ packages });
+  } catch (error) {
+    console.error('Admin fetch coin packages error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب باقات الكوينز' });
+  }
+});
+
+// Admin/Owner: Create Coin Package
+app.post('/api/admin/coins/packages', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const { id, name, coins, bonusCoins, priceAmount, currency, icon, badge, color, popular, isActive, displayOrder } = req.body;
+    if (!name || coins === undefined || priceAmount === undefined) {
+      return res.status(400).json({ error: 'يرجى إدخال اسم الباقة وعدد الكوينز والسعر التقديري' });
+    }
+
+    const cleanId = (id ? id.trim() : ('pkg_' + Date.now())).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    const db = await getDb();
+    const existing = queryOne(db, "SELECT id FROM coin_packages WHERE id = ?", [cleanId]);
+    if (existing) {
+      return res.status(400).json({ error: 'معرف الباقة موجود بالفعل، يرجى اختيار معرف آخر' });
+    }
+
+    db.run(
+      `INSERT INTO coin_packages (id, name, coins, bonus_coins, price_amount, currency, icon, badge, color, popular, is_active, display_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        cleanId,
+        name.trim(),
+        parseInt(coins, 10),
+        bonusCoins ? parseInt(bonusCoins, 10) : 0,
+        parseFloat(priceAmount),
+        currency ? currency.trim() : 'SAR',
+        icon || '🪙',
+        badge ? badge.trim() : '',
+        color || 'from-amber-600 to-amber-900',
+        popular ? 1 : 0,
+        isActive !== undefined ? (isActive ? 1 : 0) : 1,
+        displayOrder ? parseInt(displayOrder, 10) : 0
+      ]
+    );
+    saveDb();
+
+    return res.json({ success: true, message: `تمت إضافة باقة الكوينز (${name}) بنجاح!`, packageId: cleanId });
+  } catch (error) {
+    console.error('Create coin package error:', error);
+    return res.status(500).json({ error: 'خطأ أثناء إنشاء باقة الكوينز' });
+  }
+});
+
+// Admin/Owner: Update Coin Package
+app.put('/api/admin/coins/packages/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const { name, coins, bonusCoins, priceAmount, currency, icon, badge, color, popular, isActive, displayOrder } = req.body;
+    const db = await getDb();
+
+    const existing = queryOne(db, "SELECT id FROM coin_packages WHERE id = ?", [id]);
+    if (!existing) {
+      return res.status(404).json({ error: 'الباقة المحددة غير موجودة' });
+    }
+
+    db.run(
+      `UPDATE coin_packages
+       SET name = ?, coins = ?, bonus_coins = ?, price_amount = ?, currency = ?, icon = ?,
+           badge = ?, color = ?, popular = ?, is_active = ?, display_order = ?
+       WHERE id = ?`,
+      [
+        name ? name.trim() : '',
+        parseInt(coins, 10),
+        bonusCoins !== undefined ? parseInt(bonusCoins, 10) : 0,
+        parseFloat(priceAmount),
+        currency ? currency.trim() : 'SAR',
+        icon || '🪙',
+        badge ? badge.trim() : '',
+        color || 'from-amber-600 to-amber-900',
+        popular ? 1 : 0,
+        isActive !== undefined ? (isActive ? 1 : 0) : 1,
+        displayOrder !== undefined ? parseInt(displayOrder, 10) : 0,
+        id
+      ]
+    );
+    saveDb();
+
+    return res.json({ success: true, message: 'تم تحديث بيانات باقة الكوينز بنجاح' });
+  } catch (error) {
+    console.error('Update coin package error:', error);
+    return res.status(500).json({ error: 'خطأ أثناء تحديث باقة الكوينز' });
+  }
+});
+
+// Admin/Owner: Delete Coin Package
+app.delete('/api/admin/coins/packages/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const db = await getDb();
+    db.run("DELETE FROM coin_packages WHERE id = ?", [id]);
+    saveDb();
+    return res.json({ success: true, message: 'تم حذف باقة الكوينز بنجاح' });
+  } catch (error) {
+    console.error('Delete coin package error:', error);
+    return res.status(500).json({ error: 'فشل حذف باقة الكوينز' });
+  }
+});
+
 // Economy Stats Overview (Owner Hegazy Only)
 app.get('/api/admin/economy-stats', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
@@ -5731,11 +5939,47 @@ app.get('/api/admin/economy-stats', requireAuth, requireOwner, async (req: Reque
        ORDER BY t.created_at DESC LIMIT 20`
     );
 
+    const totalGiftsCountRow = queryOne(db, "SELECT COUNT(*) as count FROM gift_transactions");
+    const totalGiftsCount = totalGiftsCountRow?.count || 0;
+
+    const topGifts = queryAll(
+      db,
+      `SELECT g.id, g.name, g.arabic_name, g.icon, g.price_coins, COUNT(gt.id) as send_count
+       FROM gifts g
+       LEFT JOIN gift_transactions gt ON g.id = gt.gift_id
+       GROUP BY g.id
+       ORDER BY send_count DESC
+       LIMIT 6`
+    );
+
+    const totalRechargesRow = queryOne(
+      db,
+      "SELECT COUNT(*) as count, SUM(amount) as total FROM wallet_transactions WHERE type = 'coin_recharge_sim'"
+    );
+
+    const totalShopPurchasesRow = queryOne(
+      db,
+      "SELECT COUNT(*) as count, SUM(ABS(amount)) as total FROM wallet_transactions WHERE type = 'shop_purchase'"
+    );
+
+    const coinPackagesCountRow = queryOne(db, "SELECT COUNT(*) as count FROM coin_packages WHERE is_active = 1");
+
     return res.json({
       totalCoins,
       vipCounts,
       topWallets,
-      recentTransactions
+      recentTransactions,
+      totalGiftsCount,
+      topGifts,
+      totalRecharges: {
+        count: totalRechargesRow?.count || 0,
+        total: totalRechargesRow?.total || 0
+      },
+      totalShopPurchases: {
+        count: totalShopPurchasesRow?.count || 0,
+        total: totalShopPurchasesRow?.total || 0
+      },
+      activePackagesCount: coinPackagesCountRow?.count || 0
     });
   } catch (error) {
     console.error('Admin economy stats error:', error);

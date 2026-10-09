@@ -317,3 +317,19 @@ export interface PlatformPost {
   isLiked?: boolean;
 }
 
+export interface CoinPackage {
+  id: string;
+  name: string;
+  coins: number;
+  bonusCoins: number;
+  priceAmount: number;
+  currency: string;
+  icon: string;
+  badge?: string;
+  color?: string;
+  popular?: boolean;
+  isActive: boolean;
+  displayOrder: number;
+  createdAt?: string;
+}
+

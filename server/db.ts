@@ -464,6 +464,22 @@ function initSchema(db: SqlDatabase) {
       display_order INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS coin_packages (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      coins INTEGER NOT NULL,
+      bonus_coins INTEGER NOT NULL DEFAULT 0,
+      price_amount REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'SAR',
+      icon TEXT NOT NULL DEFAULT '🪙',
+      badge TEXT DEFAULT '',
+      color TEXT DEFAULT 'from-amber-600 to-amber-900',
+      popular INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      display_order INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // Safe migrations for country auto-detection columns
@@ -925,6 +941,96 @@ function seedDefaultData(db: SqlDatabase) {
     }
   } catch (err) {
     console.error('Error seeding default vip plans:', err);
+  }
+
+  // Seed Default Coin Packages if empty
+  try {
+    const pkgExist = db.exec("SELECT COUNT(*) as c FROM coin_packages");
+    const pCount = (pkgExist[0]?.values[0]?.[0] as number) || 0;
+    if (pCount === 0) {
+      const defaultCoinPackages = [
+        [
+          'pkg_starter',
+          'باقة البداية (Starter)',
+          100,
+          0,
+          5.0,
+          'SAR',
+          '🪙',
+          'انطلاقة سريعة',
+          'from-neutral-800 to-neutral-900',
+          0,
+          1,
+          1
+        ],
+        [
+          'pkg_popular',
+          'باقة الفضفضة (Popular)',
+          350,
+          50,
+          15.0,
+          'SAR',
+          '⭐',
+          'الأكثر طلباً 🔥',
+          'from-amber-700 to-amber-950',
+          1,
+          1,
+          2
+        ],
+        [
+          'pkg_elite',
+          'باقة النخبة (Elite Plus)',
+          800,
+          200,
+          35.0,
+          'SAR',
+          '💎',
+          'وفر 25% ✨',
+          'from-cyan-800 to-blue-950',
+          0,
+          1,
+          3
+        ],
+        [
+          'pkg_vip_booster',
+          'باقة كبار الشخصيات (VIP Booster)',
+          2000,
+          600,
+          80.0,
+          'SAR',
+          '👑',
+          'الأفضل قيمة 🏆',
+          'from-purple-800 to-indigo-950',
+          0,
+          1,
+          4
+        ],
+        [
+          'pkg_royal_vault',
+          'خزينة الكرم الملكي (Royal Vault)',
+          5000,
+          2000,
+          180.0,
+          'SAR',
+          '🏛️',
+          'باقة الملوك 🌟',
+          'from-amber-500 via-yellow-600 to-amber-900',
+          0,
+          1,
+          5
+        ]
+      ];
+
+      for (const pkg of defaultCoinPackages) {
+        db.run(
+          `INSERT INTO coin_packages (id, name, coins, bonus_coins, price_amount, currency, icon, badge, color, popular, is_active, display_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          pkg
+        );
+      }
+    }
+  } catch (err) {
+    console.error('Error seeding coin packages:', err);
   }
 
   // Seed Default Events if empty
