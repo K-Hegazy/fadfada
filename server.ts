@@ -1857,6 +1857,40 @@ app.get(['/api/users/:id/profile', '/api/users/:id'], requireAuth, async (req: R
       [targetId]
     )?.c || 0;
 
+    const giftsReceivedCount = queryOne(
+      db,
+      "SELECT COUNT(*) as c FROM gift_transactions WHERE receiver_id = ?",
+      [targetId]
+    )?.c || 0;
+
+    const invBadge = queryOne(
+      db,
+      `SELECT si.name, si.icon
+       FROM user_inventory ui
+       JOIN shop_items si ON ui.item_id = si.id
+       WHERE ui.user_id = ? AND ui.is_equipped = 1
+         AND (ui.expires_at IS NULL OR ui.expires_at > CURRENT_TIMESTAMP)
+         AND si.type = 'badge' LIMIT 1`,
+      [targetId]
+    );
+
+    const invFrame = queryOne(
+      db,
+      `SELECT si.metadata_json
+       FROM user_inventory ui
+       JOIN shop_items si ON ui.item_id = si.id
+       WHERE ui.user_id = ? AND ui.is_equipped = 1
+         AND (ui.expires_at IS NULL OR ui.expires_at > CURRENT_TIMESTAMP)
+         AND si.type = 'card_frame' LIMIT 1`,
+      [targetId]
+    );
+    let equippedFrameStyle = null;
+    if (invFrame?.metadata_json) {
+      try {
+        equippedFrameStyle = JSON.parse(invFrame.metadata_json).frameStyle;
+      } catch {}
+    }
+
     const showOnline = user.privacy_online_status !== 'nobody';
     const showBio = user.privacy_profile_visibility !== 'friends' || isFriend || targetId === session.userId;
 
@@ -1865,11 +1899,14 @@ app.get(['/api/users/:id/profile', '/api/users/:id'], requireAuth, async (req: R
       isOwner: user.role === 'owner' || user.username?.toLowerCase() === 'hegazy',
       bio: showBio ? user.bio : '',
       isOnline: showOnline ? isUserOnline(targetId) : false,
+      equippedBadge: user.is_guest === 1 ? null : (invBadge ? (invBadge.icon || invBadge.name) : null),
+      equippedFrame: user.is_guest === 1 ? null : equippedFrameStyle,
       interests,
       achievements,
       stats: {
         friendsCount,
-        followersCount
+        followersCount,
+        giftsReceivedCount
       },
       relationships: {
         isFriend,

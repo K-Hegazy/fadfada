@@ -257,7 +257,10 @@ function AppContent() {
                 <OnlineChatPanel
                   targetUser={onlineChatTargetUser}
                   onClose={handleCloseOnlineChat}
-                  onOpenProfile={(id) => setSelectedProfileId(id)}
+                  onOpenProfile={(id) => {
+                    setOnlineChatTargetUser(null);
+                    setSelectedProfileId(id);
+                  }}
                   isMobileModal={false}
                 />
               ) : selectedProfileId ? (
@@ -302,7 +305,10 @@ function AppContent() {
               <OnlineChatPanel
                 targetUser={onlineChatTargetUser}
                 onClose={handleCloseOnlineChat}
-                onOpenProfile={(id) => setSelectedProfileId(id)}
+                onOpenProfile={(id) => {
+                  setOnlineChatTargetUser(null);
+                  setSelectedProfileId(id);
+                }}
                 isMobileModal={true}
               />
             ) : (
