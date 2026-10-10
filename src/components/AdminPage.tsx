@@ -35,7 +35,13 @@ import {
   Shuffle,
   ExternalLink,
   Eye,
-  MousePointerClick
+  MousePointerClick,
+  CreditCard,
+  Clock,
+  CheckCheck,
+  XCircle,
+  Copy,
+  AlertCircle
 } from 'lucide-react';
 import { EventsPage } from './EventsPage';
 import { NewsPage } from './NewsPage';
@@ -43,7 +49,7 @@ import { MissionsPage } from './MissionsPage';
 
 export const AdminPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'events' | 'news' | 'missions' | 'reports' | 'settings' | 'story_ads' | 'random_chat'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'events' | 'news' | 'missions' | 'reports' | 'settings' | 'story_ads' | 'random_chat' | 'audit' | 'payments'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [reportsList, setReportsList] = useState<any[]>([]);
@@ -102,8 +108,111 @@ export const AdminPage: React.FC = () => {
     free_attempts: 4,
     free_minutes_per_session: 5
   });
-  const [savingRandomSettings, setSavingRandomSettings] = useState<boolean>(false);
-  const [randomSettingsSaved, setRandomSettingsSaved] = useState<boolean>(false);
+  // Audit Logs states
+  const [auditLogsList, setAuditLogsList] = useState<any[]>([]);
+  const [auditLogsLoading, setAuditLogsLoading] = useState<boolean>(false);
+  const [auditFilter, setAuditFilter] = useState<string>('all');
+
+  const fetchAuditLogs = async () => {
+    try {
+      setAuditLogsLoading(true);
+      const res = await apiRequest('/admin/audit-logs');
+      setAuditLogsList(res.logs || []);
+    } catch (e) {
+      console.error('Fetch audit logs error:', e);
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  };
+
+  // Manual Payments & Transfers states (InstaPay & Wallets)
+  const [paymentOrdersList, setPaymentOrdersList] = useState<any[]>([]);
+  const [paymentOrdersLoading, setPaymentOrdersLoading] = useState<boolean>(false);
+  const [paymentOrderFilter, setPaymentOrderFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [paymentSubTab, setPaymentSubTab] = useState<'orders' | 'settings'>('orders');
+  const [paymentConfig, setPaymentConfig] = useState<any>({
+    manual_transfers_enabled: false,
+    methods: [],
+    general_instructions: '',
+    warning_notice: ''
+  });
+  const [paymentConfigLoading, setPaymentConfigLoading] = useState<boolean>(false);
+  const [savingPaymentConfig, setSavingPaymentConfig] = useState<boolean>(false);
+  const [orderActionModal, setOrderActionModal] = useState<{ type: 'approve' | 'reject'; order: any } | null>(null);
+  const [orderActionNotes, setOrderActionNotes] = useState<string>('');
+  const [orderActionLoading, setOrderActionLoading] = useState<boolean>(false);
+
+  const fetchPaymentOrders = async (statusFilter?: string) => {
+    try {
+      setPaymentOrdersLoading(true);
+      const filter = statusFilter !== undefined ? statusFilter : paymentOrderFilter;
+      const res = await apiRequest(`/admin/payment-orders${filter !== 'all' ? `?status=${filter}` : ''}`);
+      setPaymentOrdersList(res.orders || []);
+    } catch (e) {
+      console.error('Fetch payment orders error:', e);
+    } finally {
+      setPaymentOrdersLoading(false);
+    }
+  };
+
+  const fetchPaymentSettings = async () => {
+    try {
+      setPaymentConfigLoading(true);
+      const res = await apiRequest('/admin/payment-settings');
+      if (res.config) {
+        setPaymentConfig(res.config);
+      }
+    } catch (e) {
+      console.error('Fetch payment settings error:', e);
+    } finally {
+      setPaymentConfigLoading(false);
+    }
+  };
+
+  const handleSavePaymentSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    try {
+      setSavingPaymentConfig(true);
+      await apiRequest('/admin/payment-settings', {
+        method: 'POST',
+        body: JSON.stringify(paymentConfig)
+      });
+      showNotification('تم حفظ إعدادات ووسائل التحويل المباشر بنجاح! 💳');
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء حفظ إعدادات الدفع');
+    } finally {
+      setSavingPaymentConfig(false);
+    }
+  };
+
+  const handleConfirmOrderAction = async () => {
+    if (!orderActionModal) return;
+    const { type, order } = orderActionModal;
+    setOrderActionLoading(true);
+    try {
+      if (type === 'approve') {
+        const res = await apiRequest(`/admin/payment-orders/${order.id}/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ notes: orderActionNotes.trim() })
+        });
+        showNotification(res.message || 'تم اعتماد طلب الشحن وإيداع الكوينز بنجاح! 🎉');
+      } else {
+        const res = await apiRequest(`/admin/payment-orders/${order.id}/reject`, {
+          method: 'POST',
+          body: JSON.stringify({ reason: orderActionNotes.trim() || 'لم يتم العثور على التحويل البنكي المطابق' })
+        });
+        showNotification(res.message || 'تم رفض طلب الشحن وتنبيه المستخدم.');
+      }
+      setOrderActionModal(null);
+      setOrderActionNotes('');
+      await fetchPaymentOrders();
+      if (refreshUser) await refreshUser();
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء معالجة الطلب');
+    } finally {
+      setOrderActionLoading(false);
+    }
+  };
 
   const isOwner = user?.role === 'owner';
   const isAdmin = user?.role === 'admin' || isOwner;
@@ -230,6 +339,11 @@ export const AdminPage: React.FC = () => {
     if (activeTab === 'reports') fetchReports();
     if (activeTab === 'story_ads') fetchStoryAds();
     if (activeTab === 'random_chat') fetchRandomSettings();
+    if (activeTab === 'audit') fetchAuditLogs();
+    if (activeTab === 'payments') {
+      fetchPaymentOrders();
+      fetchPaymentSettings();
+    }
   }, [activeTab]);
 
   const handleSaveRandomSettings = async (e: React.FormEvent) => {
@@ -731,6 +845,29 @@ export const AdminPage: React.FC = () => {
               >
                 <Shuffle className="w-3.5 h-3.5 text-amber-400" />
                 أسعار التواصل العشوائي
+              </button>
+              <button
+                onClick={() => setActiveTab('audit')}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === 'audit' ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-sm' : 'text-neutral-400 hover:text-amber-300'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5 text-amber-400" />
+                سجل تدقيق الإدارة
+              </button>
+              <button
+                onClick={() => setActiveTab('payments')}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === 'payments' ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-sm' : 'text-neutral-400 hover:text-amber-300'
+                }`}
+              >
+                <CreditCard className="w-3.5 h-3.5 text-amber-400" />
+                <span>التحويلات والدفع</span>
+                {paymentOrdersList.filter(o => o.status === 'pending').length > 0 && (
+                  <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-amber-500 text-neutral-950 font-black">
+                    {paymentOrdersList.filter(o => o.status === 'pending').length}
+                  </span>
+                )}
               </button>
             </>
           )}
@@ -1794,6 +1931,639 @@ export const AdminPage: React.FC = () => {
               {savingRandomSettings ? 'جاري الحفظ...' : 'حفظ أسعار وإعدادات التواصل العشوائي'}
             </button>
           </form>
+        </div>
+      )}
+
+      {/* 9. AUDIT LOGS TAB (Owner Hegazy Only) */}
+      {activeTab === 'audit' && isOwner && (
+        <div className="space-y-4 animate-in fade-in" dir="rtl">
+          <div className="p-6 rounded-3xl bg-neutral-900/90 border border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-cairo font-black text-white flex items-center gap-2">
+                <FileText className="w-5 h-5 text-amber-400" />
+                سجل تدقيق العمليات الإدارية والمالية (Audit Log)
+              </h2>
+              <p className="text-xs text-neutral-400 font-tajawal">
+                سجل غير قابل للتعديل يوثق جميع التعديلات الحساسة التي تمت على الباقات، الأرصدة، رتب VIP، الفعاليات، وبنود المتجر.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={fetchAuditLogs}
+                disabled={auditLogsLoading}
+                className="px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold font-tajawal flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${auditLogsLoading ? 'animate-spin' : ''}`} />
+                تحديث السجل
+              </button>
+            </div>
+          </div>
+
+          {/* Audit Filter */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs font-bold font-tajawal">
+            {[
+              { id: 'all', label: 'الكل' },
+              { id: 'admin_adjust_coins', label: 'تعديل المحافظ' },
+              { id: 'owner_sandbox_recharge', label: 'شحن تجريبي' },
+              { id: 'vip', label: 'اشتراكات وباقات VIP' },
+              { id: 'coin_package', label: 'باقات الكوينز' },
+              { id: 'shop', label: 'المتجر' }
+            ].map(f => (
+              <button
+                key={f.id}
+                onClick={() => setAuditFilter(f.id)}
+                className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
+                  auditFilter === f.id
+                    ? 'bg-amber-500 text-neutral-950 font-black shadow-sm'
+                    : 'bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Logs List */}
+          <div className="rounded-3xl bg-neutral-900/60 border border-neutral-800 divide-y divide-neutral-800/80 overflow-hidden">
+            {auditLogsLoading ? (
+              <div className="p-8 text-center text-neutral-400 text-xs font-tajawal flex items-center justify-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                جاري تحميل سجل التدقيق...
+              </div>
+            ) : auditLogsList.length === 0 ? (
+              <div className="p-8 text-center text-neutral-400 text-xs font-tajawal">
+                لا توجد سجلات تدقيق مسجلة حتى الآن.
+              </div>
+            ) : (
+              auditLogsList
+                .filter(log => {
+                  if (auditFilter === 'all') return true;
+                  if (auditFilter === 'vip') return log.action.includes('vip');
+                  if (auditFilter === 'coin_package') return log.action.includes('package');
+                  if (auditFilter === 'shop') return log.action.includes('shop');
+                  return log.action === auditFilter;
+                })
+                .map(log => (
+                  <div key={log.id} className="p-4 hover:bg-neutral-800/30 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-right">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2 py-0.5 rounded-md bg-amber-950/80 border border-amber-800 text-[11px] font-bold text-amber-300 font-cairo">
+                          {log.action}
+                        </span>
+                        <span className="text-xs font-bold text-white font-cairo">
+                          بواسطة: {log.actor_username || 'Hegazy (المالك)'}
+                        </span>
+                        {log.target_type && (
+                          <span className="text-[11px] text-neutral-500">
+                            الهدف: {log.target_type}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-neutral-300 font-tajawal leading-relaxed">
+                        {log.details}
+                      </p>
+                    </div>
+                    <div className="text-[11px] text-neutral-500 font-tajawal whitespace-nowrap sm:text-left dir-ltr">
+                      {new Date(log.created_at).toLocaleString('ar-EG', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </div>
+                  </div>
+                ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 10. MANUAL PAYMENTS & TRANSFERS TAB (Owner Hegazy Only) */}
+      {activeTab === 'payments' && isOwner && (
+        <div className="space-y-5 animate-in fade-in" dir="rtl">
+          {/* Header */}
+          <div className="p-6 rounded-3xl bg-neutral-900/90 border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-cairo font-black text-white flex items-center gap-2">
+                <CreditCard className="w-5 h-5 text-amber-400" />
+                إدارة طلبات الشحن والتحويلات اليدوية (InstaPay ومحافظ المحمول)
+              </h2>
+              <p className="text-xs text-neutral-400 font-tajawal">
+                نظام شحن يدوي مباشر بالجنيه المصري: مراجعة إشعارات التحويل والمطابقة البنكية قبل اعتماد الكوينز، مع حماية المعاملات ضد التكرار.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  fetchPaymentOrders();
+                  fetchPaymentSettings();
+                }}
+                disabled={paymentOrdersLoading || paymentConfigLoading}
+                className="px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold font-tajawal flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${paymentOrdersLoading || paymentConfigLoading ? 'animate-spin' : ''}`} />
+                تحديث البيانات
+              </button>
+            </div>
+          </div>
+
+          {/* Sub-Tabs: Orders vs Settings */}
+          <div className="flex items-center gap-2 p-1 rounded-2xl bg-black/40 border border-neutral-800 self-start w-fit">
+            <button
+              onClick={() => setPaymentSubTab('orders')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold font-cairo transition-all cursor-pointer flex items-center gap-2 ${
+                paymentSubTab === 'orders'
+                  ? 'bg-amber-500 text-neutral-950 font-black shadow-md'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>طلبات الشحن الواردة</span>
+              {paymentOrdersList.filter(o => o.status === 'pending').length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-neutral-950 text-amber-400">
+                  {paymentOrdersList.filter(o => o.status === 'pending').length}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setPaymentSubTab('settings')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold font-cairo transition-all cursor-pointer flex items-center gap-2 ${
+                paymentSubTab === 'settings'
+                  ? 'bg-amber-500 text-neutral-950 font-black shadow-md'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>إعدادات وسائل الاستقبال والحسابات</span>
+            </button>
+          </div>
+
+          {/* SUB-VIEW 1: ORDERS LIST */}
+          {paymentSubTab === 'orders' && (
+            <div className="space-y-4">
+              {/* Filter Pills */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs font-bold font-tajawal">
+                {[
+                  { id: 'all', label: 'كافة الطلبات' },
+                  { id: 'pending', label: `قيد الانتظار (${paymentOrdersList.filter(o => o.status === 'pending').length})` },
+                  { id: 'approved', label: 'المعتمدة' },
+                  { id: 'rejected', label: 'المرفوضة' }
+                ].map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => {
+                      setPaymentOrderFilter(f.id as any);
+                      fetchPaymentOrders(f.id);
+                    }}
+                    className={`px-3.5 py-1.5 rounded-xl cursor-pointer transition-all whitespace-nowrap ${
+                      paymentOrderFilter === f.id
+                        ? 'bg-amber-500 text-neutral-950 font-black shadow-sm'
+                        : 'bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Orders Grid / Cards */}
+              {paymentOrdersLoading ? (
+                <div className="p-12 text-center text-neutral-400 text-xs font-tajawal flex items-center justify-center gap-2 rounded-3xl bg-neutral-900/40 border border-neutral-800">
+                  <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                  جاري تحميل طلبات الشحن...
+                </div>
+              ) : paymentOrdersList.length === 0 ? (
+                <div className="p-12 text-center text-neutral-400 text-xs font-tajawal rounded-3xl bg-neutral-900/40 border border-neutral-800 space-y-2">
+                  <CheckCircle2 className="w-8 h-8 text-neutral-600 mx-auto" />
+                  <p>لا توجد طلبات شحن مطابقة في هذا التصنيف حالياً.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3.5">
+                  {paymentOrdersList.map(order => {
+                    const isPending = order.status === 'pending';
+                    const isApproved = order.status === 'approved';
+                    const isRejected = order.status === 'rejected';
+
+                    const totalCoins = (order.packageCoins || 0) + (order.packageBonusCoins || 0);
+
+                    return (
+                      <div
+                        key={order.id}
+                        className={`p-5 rounded-3xl border transition-all space-y-4 ${
+                          isPending
+                            ? 'bg-neutral-900/95 border-amber-500/50 shadow-lg shadow-amber-950/20'
+                            : isApproved
+                            ? 'bg-neutral-900/60 border-neutral-800'
+                            : 'bg-neutral-900/40 border-neutral-800/60 opacity-80'
+                        }`}
+                      >
+                        {/* Header line */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800/80">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-2xl bg-neutral-800 border border-neutral-700 flex items-center justify-center overflow-hidden shrink-0">
+                              {order.avatar ? (
+                                <img src={order.avatar} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <Users className="w-5 h-5 text-neutral-400" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-cairo font-bold text-sm text-white">{order.displayName}</span>
+                                <span className="text-[11px] text-neutral-400 font-tajawal">(@{order.username})</span>
+                              </div>
+                              <span className="text-[10px] text-neutral-500 font-mono">رقم الطلب: {order.id}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 self-start sm:self-auto">
+                            {isPending && (
+                              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1.5 font-tajawal">
+                                <Clock className="w-3.5 h-3.5 animate-pulse" />
+                                بانتظار المراجعة والاعتماد
+                              </span>
+                            )}
+                            {isApproved && (
+                              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5 font-tajawal">
+                                <CheckCheck className="w-3.5 h-3.5" />
+                                معتمد ومودع بالمحفظة
+                              </span>
+                            )}
+                            {isRejected && (
+                              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1.5 font-tajawal">
+                                <XCircle className="w-3.5 h-3.5" />
+                                مرفوض
+                              </span>
+                            )}
+                            <span className="text-[11px] text-neutral-500 font-tajawal">
+                              {new Date(order.createdAt).toLocaleString('ar-EG', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Details grid */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-tajawal">
+                          <div className="p-3 rounded-2xl bg-black/40 border border-neutral-800/80 space-y-1">
+                            <span className="text-neutral-400 text-[11px] block">الباقة المطلوبة</span>
+                            <span className="font-cairo font-bold text-white text-sm block">{order.packageName}</span>
+                            <span className="text-amber-400 font-bold text-[11px]">
+                              +{totalCoins.toLocaleString('ar-EG')} كوينز
+                            </span>
+                          </div>
+
+                          <div className="p-3 rounded-2xl bg-black/40 border border-neutral-800/80 space-y-1">
+                            <span className="text-neutral-400 text-[11px] block">المبلغ بالجنيه</span>
+                            <span className="font-cairo font-black text-amber-400 text-base block">
+                              {order.amount} {order.currency}
+                            </span>
+                            <span className="text-neutral-500 text-[10px]">المطابقة بالبنك</span>
+                          </div>
+
+                          <div className="p-3 rounded-2xl bg-black/40 border border-neutral-800/80 space-y-1">
+                            <span className="text-neutral-400 text-[11px] block">وسيلة التحويل</span>
+                            <span className="font-cairo font-bold text-white block">
+                              {order.transferMethod === 'instapay'
+                                ? '⚡ إنستاباي (InstaPay)'
+                                : order.transferMethod === 'vodafone_cash'
+                                ? '📱 فودافون كاش'
+                                : order.transferMethod === 'orange_cash'
+                                ? '📱 أورنج كاش'
+                                : order.transferMethod === 'etisalat_cash'
+                                ? '📱 اتصالات كاش'
+                                : order.transferMethod === 'we_pay'
+                                ? '📱 وي باي (WE Pay)'
+                                : order.transferMethod}
+                            </span>
+                            <span className="text-neutral-500 text-[10px]">تحويل مباشر</span>
+                          </div>
+
+                          <div className="p-3 rounded-2xl bg-black/40 border border-neutral-800/80 space-y-1">
+                            <span className="text-neutral-400 text-[11px] block">اسم ورقم المحول</span>
+                            <span className="font-bold text-white block truncate" title={order.senderName}>
+                              {order.senderName || 'غير مسجل'}
+                            </span>
+                            <span className="text-amber-300 font-mono text-[11px] block truncate" title={order.senderPhoneOrHandle}>
+                              {order.senderPhoneOrHandle}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Extra notes / Reference */}
+                        {(order.transactionReference || order.receiptNote) && (
+                          <div className="p-3 rounded-2xl bg-neutral-950/60 border border-neutral-800/60 text-xs font-tajawal space-y-1">
+                            {order.transactionReference && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-neutral-400">رقم المعاملة / المرجع:</span>
+                                <span className="font-mono text-white font-bold">{order.transactionReference}</span>
+                              </div>
+                            )}
+                            {order.receiptNote && (
+                              <div className="flex items-start gap-2">
+                                <span className="text-neutral-400 shrink-0">ملاحظات المستخدم:</span>
+                                <span className="text-neutral-300">{order.receiptNote}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Admin audit note if reviewed */}
+                        {order.adminNotes && !isPending && (
+                          <div className="p-2.5 rounded-xl bg-neutral-800/50 text-[11px] font-tajawal text-neutral-300 flex items-center gap-1.5">
+                            <span className="text-neutral-400">ملاحظة التدقيق:</span>
+                            <span>{order.adminNotes}</span>
+                          </div>
+                        )}
+
+                        {/* Action buttons (Pending only) */}
+                        {isPending && (
+                          <div className="pt-2 flex flex-col sm:flex-row items-center justify-end gap-2.5 border-t border-neutral-800/60">
+                            <button
+                              onClick={() => {
+                                setOrderActionNotes('تم مطابقة التحويل مع الحساب البنكي والاعتماد.');
+                                setOrderActionModal({ type: 'approve', order });
+                              }}
+                              className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-cairo font-bold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
+                            >
+                              <CheckCheck className="w-4 h-4" />
+                              <span>تأكيد واستلام التحويل (إيداع {totalCoins.toLocaleString('ar-EG')} كوينز)</span>
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setOrderActionNotes('');
+                                setOrderActionModal({ type: 'reject', order });
+                              }}
+                              className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 font-cairo font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                            >
+                              <XCircle className="w-4 h-4" />
+                              <span>رفض الطلب</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SUB-VIEW 2: SETTINGS & RECEPTION ACCOUNTS */}
+          {paymentSubTab === 'settings' && (
+            <form onSubmit={handleSavePaymentSettings} className="space-y-5 rounded-3xl bg-neutral-900/80 border border-neutral-800 p-6 shadow-xl">
+              {/* Notice */}
+              <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-800/40 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1 text-xs font-tajawal">
+                  <h4 className="font-cairo font-bold text-amber-300 text-sm">تنبيه حماية بيانات الاستقبال والامتثال</h4>
+                  <p className="text-amber-200/80 leading-relaxed">
+                    لا تقم بإنشاء بيانات أو أرقام وهمية. أدخل أرقام وعناوين الحسابات المعتمدة التابعة للمالك حصراً بعد التحقق من مطابقتها لنشاط المنصة. سيتم عرض هذه البيانات للأعضاء عند رغبتهم في الشحن للتحويل إليها.
+                  </p>
+                </div>
+              </div>
+
+              {/* Master toggle */}
+              <div className="p-4 rounded-2xl bg-black/40 border border-neutral-800 flex items-center justify-between">
+                <div>
+                  <h4 className="font-cairo font-bold text-sm text-white">تفعيل خدمة التحويل المباشر في المنصة</h4>
+                  <p className="text-xs text-neutral-400 font-tajawal">
+                    عند التعطيل، لن يتمكن أي مستخدم من إنشاء طلبات تحويل حتى يتم تفعيلها.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!paymentConfig.manual_transfers_enabled}
+                    onChange={(e) =>
+                      setPaymentConfig({ ...paymentConfig, manual_transfers_enabled: e.target.checked })
+                    }
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                </label>
+              </div>
+
+              {/* Transfer Methods List */}
+              <div className="space-y-4">
+                <h3 className="font-cairo font-bold text-sm text-white">وسائل التحويل المعتمدة وبيانات الاستقبال:</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {(paymentConfig.methods || []).map((method: any, idx: number) => (
+                    <div
+                      key={method.id || idx}
+                      className={`p-4 rounded-2xl border space-y-3 transition-all ${
+                        method.enabled ? 'bg-neutral-950/80 border-amber-600/40' : 'bg-neutral-950/40 border-neutral-800 opacity-70'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{method.id === 'instapay' ? '⚡' : '📱'}</span>
+                          <span className="font-cairo font-bold text-xs text-white">{method.name}</span>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={!!method.enabled}
+                            onChange={(e) => {
+                              const updated = [...paymentConfig.methods];
+                              updated[idx].enabled = e.target.checked;
+                              setPaymentConfig({ ...paymentConfig, methods: updated });
+                            }}
+                            className="sr-only peer"
+                          />
+                          <div className="w-9 h-5 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                        </label>
+                      </div>
+
+                      <div className="space-y-2.5 text-xs font-tajawal">
+                        <div>
+                          <label className="block text-neutral-400 mb-1 text-[11px]">اسم صاحب الحساب / المحفظة</label>
+                          <input
+                            type="text"
+                            placeholder="مثال: الاسم الرسمي للمالك"
+                            value={method.account_name || ''}
+                            onChange={(e) => {
+                              const updated = [...paymentConfig.methods];
+                              updated[idx].account_name = e.target.value;
+                              setPaymentConfig({ ...paymentConfig, methods: updated });
+                            }}
+                            className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-neutral-400 mb-1 text-[11px]">
+                            {method.id === 'instapay' ? 'عنوان الدفع (IPA) أو رقم الحساب' : 'رقم هاتف المحفظة المحول إليها'}
+                          </label>
+                          <input
+                            type="text"
+                            placeholder={method.id === 'instapay' ? 'مثال: username@instapay' : 'مثال: 010xxxxxxxx'}
+                            value={method.account_handle || method.account_number || ''}
+                            onChange={(e) => {
+                              const updated = [...paymentConfig.methods];
+                              updated[idx].account_handle = e.target.value;
+                              updated[idx].account_number = e.target.value;
+                              setPaymentConfig({ ...paymentConfig, methods: updated });
+                            }}
+                            className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs font-mono"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-neutral-400 mb-1 text-[11px]">تعليمات التحويل للعميل</label>
+                          <textarea
+                            rows={2}
+                            value={method.instructions || ''}
+                            onChange={(e) => {
+                              const updated = [...paymentConfig.methods];
+                              updated[idx].instructions = e.target.value;
+                              setPaymentConfig({ ...paymentConfig, methods: updated });
+                            }}
+                            className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-300 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* General instructions */}
+              <div className="space-y-2 text-xs font-tajawal">
+                <label className="block text-neutral-300 font-bold font-cairo text-xs">تعليمات الشحن العامة للعملاء</label>
+                <textarea
+                  rows={2}
+                  value={paymentConfig.general_instructions || ''}
+                  onChange={(e) => setPaymentConfig({ ...paymentConfig, general_instructions: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                />
+              </div>
+
+              {/* Warning Notice */}
+              <div className="space-y-2 text-xs font-tajawal">
+                <label className="block text-neutral-300 font-bold font-cairo text-xs">تنبيه عدم الشحن التلقائي (التحقق اليدوي)</label>
+                <textarea
+                  rows={2}
+                  value={paymentConfig.warning_notice || ''}
+                  onChange={(e) => setPaymentConfig({ ...paymentConfig, warning_notice: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                />
+              </div>
+
+              {/* Submit */}
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="submit"
+                  disabled={savingPaymentConfig}
+                  className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black font-cairo text-xs shadow-md cursor-pointer transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{savingPaymentConfig ? 'جاري الحفظ...' : 'حفظ إعدادات وسائل التحويل والاستقبال'}</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* APPROVE / REJECT MODAL */}
+          {orderActionModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in" dir="rtl">
+              <div className="w-full max-w-md rounded-3xl bg-[#0e1017] border border-amber-800/80 p-6 space-y-4 shadow-2xl">
+                <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+                  <div className="flex items-center gap-2 font-cairo font-bold text-sm text-white">
+                    {orderActionModal.type === 'approve' ? (
+                      <>
+                        <CheckCheck className="w-5 h-5 text-emerald-400" />
+                        <span>تأكيد اعتماد طلب الشحن وإيداع الكوينز</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-5 h-5 text-rose-400" />
+                        <span>رفض طلب الشحن</span>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setOrderActionModal(null)}
+                    className="p-1 rounded-lg text-neutral-400 hover:text-white cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-3 text-xs font-tajawal">
+                  <div className="p-3.5 rounded-2xl bg-black/40 border border-neutral-800 space-y-1.5">
+                    <div className="flex justify-between text-neutral-400">
+                      <span>المستخدم:</span>
+                      <span className="font-bold text-white">{orderActionModal.order.displayName} (@{orderActionModal.order.username})</span>
+                    </div>
+                    <div className="flex justify-between text-neutral-400">
+                      <span>المبلغ المطلوب:</span>
+                      <span className="font-bold text-amber-400">{orderActionModal.order.amount} {orderActionModal.order.currency}</span>
+                    </div>
+                    <div className="flex justify-between text-neutral-400">
+                      <span>الكوينز المستحقة للإيداع:</span>
+                      <span className="font-bold text-emerald-400">
+                        +{(orderActionModal.order.packageCoins + orderActionModal.order.packageBonusCoins).toLocaleString('ar-EG')} كوينز
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-neutral-400">
+                      <span>المحول منه:</span>
+                      <span className="font-mono text-white">{orderActionModal.order.senderPhoneOrHandle}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-neutral-300 font-semibold mb-1">
+                      {orderActionModal.type === 'approve' ? 'ملاحظة التدقيق (اختياري)' : 'سبب الرفض (سيتم إرساله للمستخدم) *'}
+                    </label>
+                    <input
+                      type="text"
+                      required={orderActionModal.type === 'reject'}
+                      placeholder={orderActionModal.type === 'approve' ? 'تمت المطابقة البنكية' : 'مثال: لم يتم العثور على التحويل...'}
+                      value={orderActionNotes}
+                      onChange={(e) => setOrderActionNotes(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex items-center justify-end gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setOrderActionModal(null)}
+                      className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs cursor-pointer"
+                    >
+                      إلغاء
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={orderActionLoading || (orderActionModal.type === 'reject' && !orderActionNotes.trim())}
+                      onClick={handleConfirmOrderAction}
+                      className={`px-5 py-2 rounded-xl text-xs font-black font-cairo shadow-md cursor-pointer transition-all disabled:opacity-50 ${
+                        orderActionModal.type === 'approve'
+                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                          : 'bg-rose-600 hover:bg-rose-500 text-white'
+                      }`}
+                    >
+                      {orderActionLoading
+                        ? 'جاري التنفيذ...'
+                        : orderActionModal.type === 'approve'
+                        ? 'تأكيد الإيداع الآن'
+                        : 'تأكيد الرفض'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

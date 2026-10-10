@@ -19,7 +19,8 @@ import {
   Layers,
   Check,
   RefreshCw,
-  Zap
+  Zap,
+  CreditCard
 } from 'lucide-react';
 import { ShopItem, UserInventoryItem, CoinPackage } from '../types';
 
@@ -37,6 +38,8 @@ export const ShopPage: React.FC = () => {
   const [purchasingPackageId, setPurchasingPackageId] = useState<string | null>(null);
   const [equippingId, setEquippingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [paymentInfoModalOpen, setPaymentInfoModalOpen] = useState(false);
+  const [selectedPkgForInfo, setSelectedPkgForInfo] = useState<CoinPackage | null>(null);
 
   // Owner state (Shop management is strictly Owner only)
   const isOwner = user?.role === 'owner';
@@ -97,6 +100,12 @@ export const ShopPage: React.FC = () => {
   };
 
   const handleSimulateRecharge = async (pkg: CoinPackage) => {
+    if (!isOwner) {
+      setSelectedPkgForInfo(pkg);
+      setPaymentInfoModalOpen(true);
+      return;
+    }
+
     if (!token || user?.isGuest) {
       setMessage({ text: 'شحن الكوينز متاح فقط للأعضاء المسجلين. يرجى تسجيل حسابك أولاً!', type: 'error' });
       return;
@@ -472,29 +481,59 @@ export const ShopPage: React.FC = () => {
       {/* COINS PACKAGES VIEW */}
       {activeTab === 'coins' && (
         <div className="space-y-6">
-          <div className="p-4 sm:p-5 rounded-2xl sm:rounded-3xl bg-neutral-900/90 border border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
-                <Zap className="w-5 h-5" />
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 font-cairo font-bold text-sm text-white">
-                  <span>باقات شحن الكوينز (الوضع التجريبي الآمن Sandbox)</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
-                    جاهز للتكامل
-                  </span>
+          {/* Readiness / Sandbox Banner */}
+          {isOwner ? (
+            <div className="p-4 sm:p-5 rounded-2xl sm:rounded-3xl bg-amber-950/40 border border-amber-600/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+                  <Crown className="w-5 h-5" />
                 </div>
-                <p className="text-xs text-neutral-300 font-tajawal leading-relaxed">
-                  اختر أي باقة لتجربة شحن رصيدك فورياً واختبار شراء الشارات والعضويات الملكية وإهداء الأصدقاء. لا يتم خصم أموال حقيقية حالياً.
-                </p>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 font-cairo font-bold text-sm text-white">
+                    <span>لوحة اختبار الشحن التجريبي (خاص بالمالك Hegazy)</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500 text-neutral-950 font-bold">
+                      Sandbox للمالك فقط
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-200/80 font-tajawal leading-relaxed">
+                    ميزة مخصصة للمالك فقط لفحص الكوينز والمحفظة. الشحن التجريبي معطل تماماً للأعضاء في بيئة الإنتاج لحماية اقتصاد المنصة.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-amber-300 font-tajawal shrink-0 bg-black/40 px-3.5 py-2 rounded-xl border border-amber-800/60">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>حماية كاملة ومعاملات موثقة</span>
               </div>
             </div>
+          ) : (
+            <div className="p-4 sm:p-5 rounded-2xl sm:rounded-3xl bg-neutral-900/90 border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 font-cairo font-bold text-sm text-white">
+                    <span>باقات شحن كوينز فضفضه (تحويل يدوي مباشر)</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-amber-300 border border-neutral-700 font-bold">
+                      InstaPay ومحافظ المحمول
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-400 font-tajawal leading-relaxed">
+                    يتم الشحن بالتحويل المباشر بالجنيه المصري ومراجعة واعتماد الكوينز في المحفظة يدوياً فور المطابقة البنكية.
+                  </p>
+                </div>
+              </div>
 
-            <div className="flex items-center gap-2 text-xs text-neutral-400 font-tajawal shrink-0 bg-black/40 px-3 py-2 rounded-xl border border-neutral-800">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>نظام شحن كوينز جاهز للبوابات المالية</span>
+              <a
+                href="/wallet"
+                className="flex items-center gap-2 text-xs text-amber-300 hover:text-amber-200 font-tajawal shrink-0 bg-amber-950/40 hover:bg-amber-950/60 px-3.5 py-2 rounded-xl border border-amber-800/60 transition-all cursor-pointer"
+              >
+                <CreditCard className="w-4 h-4 text-amber-400" />
+                <span>الانتقال للمحفظة والشحن</span>
+              </a>
             </div>
-          </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
             {coinPackages.map((pkg) => {
@@ -543,27 +582,37 @@ export const ShopPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <button
-                    disabled={isBuying}
-                    onClick={() => handleSimulateRecharge(pkg)}
-                    className={`w-full py-2.5 px-3 rounded-xl font-black text-xs transition-all cursor-pointer shadow-md flex items-center justify-center gap-1.5 active:scale-95 ${
-                      pkg.popular
-                        ? 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-neutral-950'
-                        : 'bg-white hover:bg-neutral-100 text-neutral-950'
-                    }`}
-                  >
-                    {isBuying ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>جاري الشحن...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>شحن تجريبي فوراً</span>
-                      </>
-                    )}
-                  </button>
+                  {isOwner ? (
+                    <button
+                      disabled={isBuying}
+                      onClick={() => handleSimulateRecharge(pkg)}
+                      className={`w-full py-2.5 px-3 rounded-xl font-black text-xs transition-all cursor-pointer shadow-md flex items-center justify-center gap-1.5 active:scale-95 ${
+                        pkg.popular
+                          ? 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-neutral-950'
+                          : 'bg-amber-400 hover:bg-amber-300 text-neutral-950'
+                      }`}
+                    >
+                      {isBuying ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>جاري الشحن...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Crown className="w-3.5 h-3.5" />
+                          <span>اختبار الشحن (المالك)</span>
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <a
+                      href="/wallet"
+                      className="w-full py-2.5 px-3 rounded-xl font-bold text-xs bg-amber-500 hover:bg-amber-400 text-neutral-950 transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow-md"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>طلب شحن يدوي بالمحفظة</span>
+                    </a>
+                  )}
                 </div>
               );
             })}
@@ -1303,6 +1352,89 @@ export const ShopPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Gateway Readiness & Transparency Modal */}
+      {paymentInfoModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#0e1017] border border-neutral-800 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-cairo font-bold text-base text-white">جاهزية بوابات الدفع الإلكتروني</h3>
+                  <span className="text-[11px] text-teal-400 font-tajawal">مصر والشرق الأوسط</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setPaymentInfoModalOpen(false)}
+                className="w-8 h-8 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white flex items-center justify-center transition-all cursor-pointer text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            {selectedPkgForInfo && (
+              <div className="p-4 rounded-2xl bg-neutral-900/80 border border-neutral-800 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{selectedPkgForInfo.icon || '🪙'}</span>
+                  <div>
+                    <div className="font-cairo font-bold text-sm text-white">{selectedPkgForInfo.name}</div>
+                    <div className="text-[11px] text-amber-400 font-tajawal">
+                      {(selectedPkgForInfo.coins + (selectedPkgForInfo.bonusCoins || 0)).toLocaleString('ar-EG')} كوينز
+                    </div>
+                  </div>
+                </div>
+                <div className="text-left font-cairo font-bold text-sm text-white">
+                  {selectedPkgForInfo.priceAmount} {selectedPkgForInfo.currency}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <span className="text-xs font-bold text-neutral-300 font-tajawal block">
+                وسائل الدفع الجاري اعتمادها رسميًا:
+              </span>
+              <div className="grid grid-cols-2 gap-2 text-xs font-tajawal">
+                <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center gap-2 text-neutral-200">
+                  <span className="text-base">📱</span>
+                  <span>فودافون كاش والمحافظ</span>
+                </div>
+                <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center gap-2 text-neutral-200">
+                  <span className="text-base">⚡</span>
+                  <span>إنستاباي (InstaPay)</span>
+                </div>
+                <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center gap-2 text-neutral-200">
+                  <span className="text-base">🏪</span>
+                  <span>فوري (Fawry)</span>
+                </div>
+                <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center gap-2 text-neutral-200">
+                  <span className="text-base">💳</span>
+                  <span>ميزة / فيزا / ماستركارد</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-800/40 space-y-1.5 text-xs text-amber-200/90 font-tajawal leading-relaxed">
+              <div className="font-bold flex items-center gap-1.5 text-amber-300">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>إشعار حماية وشفافية المستخدم</span>
+              </div>
+              <p>
+                بوابات التحصيل المالي في مصر تخضع لإجراءات التعاقد التجاري والاعتماد الموثوق. لحماية أموالكم، لن يتم تحصيل أي مبالغ أو تفعيل الشحن الفعلي إلا بعد ربط المزود المعتمد والتحقق المباشر من السيرفر.
+              </p>
+            </div>
+
+            <button
+              onClick={() => setPaymentInfoModalOpen(false)}
+              className="w-full py-3 rounded-xl bg-white hover:bg-neutral-100 text-neutral-950 font-cairo font-black text-xs transition-all cursor-pointer shadow-lg active:scale-98"
+            >
+              فهمت ذلك، استمرار التصفح
+            </button>
           </div>
         </div>
       )}

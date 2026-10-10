@@ -364,7 +364,27 @@ function initSchema(db: SqlDatabase) {
       type TEXT NOT NULL,
       description TEXT NOT NULL,
       related_user_id TEXT,
+      balance_before INTEGER DEFAULT 0,
+      balance_after INTEGER DEFAULT 0,
+      idempotency_key TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS payment_orders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      package_id TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      currency TEXT DEFAULT 'EGP',
+      provider TEXT NOT NULL, -- 'paymob', 'fawry', 'vodafone_cash'
+      status TEXT DEFAULT 'pending', -- 'pending', 'paid', 'failed', 'cancelled'
+      provider_order_id TEXT,
+      provider_tx_id TEXT,
+      idempotency_key TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      fulfilled_at DATETIME,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -559,6 +579,25 @@ function initSchema(db: SqlDatabase) {
   try { db.run("ALTER TABLE events ADD COLUMN date_display TEXT DEFAULT ''"); } catch {}
   try { db.run("ALTER TABLE missions ADD COLUMN is_active INTEGER DEFAULT 1"); } catch {}
 
+  // Safe migrations for wallet transactions auditability & balance tracking
+  try { db.run("ALTER TABLE wallet_transactions ADD COLUMN balance_before INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE wallet_transactions ADD COLUMN balance_after INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE wallet_transactions ADD COLUMN idempotency_key TEXT"); } catch {}
+  try { db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_user_idemp ON wallet_transactions(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL"); } catch {}
+  try { db.run("CREATE INDEX IF NOT EXISTS idx_pay_orders_user ON payment_orders(user_id, status)"); } catch {}
+
+  // Safe migrations for manual recharge payment orders
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN transfer_method TEXT DEFAULT 'instapay'"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN sender_name TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN sender_phone_or_handle TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN transaction_reference TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN receipt_note TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN receipt_image_url TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN admin_notes TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN reviewed_by TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE payment_orders ADD COLUMN reviewed_at DATETIME DEFAULT NULL"); } catch {}
+  try { db.run("CREATE INDEX IF NOT EXISTS idx_pay_orders_status ON payment_orders(status, created_at)"); } catch {}
+
   // Safe creation of platform_posts and post_likes tables
   db.run(`
     CREATE TABLE IF NOT EXISTS platform_posts (
@@ -717,6 +756,60 @@ function seedDefaultData(db: SqlDatabase) {
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('profanity_filter_enabled', 'true')");
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('suspicious_links_filter', 'true')");
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('rate_limit_login_lockout_mins', '15')");
+  }
+
+  // Payment configuration (Manual transfer: InstaPay / Vodafone Cash / Mobile wallets)
+  // Strictly NO fake account numbers. Enabled is false by default until Owner configures real accounts in Dashboard.
+  const paymentConfig = db.exec("SELECT value FROM system_settings WHERE key = 'payment_methods_config'");
+  if (paymentConfig.length === 0 || paymentConfig[0].values.length === 0) {
+    const defaultPaymentConfig = JSON.stringify({
+      manual_transfers_enabled: false,
+      methods: [
+        {
+          id: 'instapay',
+          name: 'إنستاباي (InstaPay)',
+          enabled: false,
+          account_name: '',
+          account_handle: '',
+          instructions: 'قم بفتح تطبيق إنستاباي، اختر إرسال نقود، ثم أدخل الحساب أو عنوان الدفع (IPA) المعتمد أدناه. بعد إتمام التحويل اكتب اسمك ورقم العملية لتأكيد الشحن.'
+        },
+        {
+          id: 'vodafone_cash',
+          name: 'فودافون كاش (Vodafone Cash)',
+          enabled: false,
+          account_name: '',
+          account_number: '',
+          instructions: 'قم بتحويل المبلغ إلى رقم فودافون كاش الموضح أدناه، ثم أدخل رقم المحفظة المحول منها لمطابقة التحويل واعتماد الكوينز.'
+        },
+        {
+          id: 'orange_cash',
+          name: 'أورنج كاش (Orange Cash)',
+          enabled: false,
+          account_name: '',
+          account_number: '',
+          instructions: 'قم بتحويل المبلغ إلى رقم أورنج كاش الموضح، ثم دوّن رقم محفظتك واسم المحول.'
+        },
+        {
+          id: 'etisalat_cash',
+          name: 'اتصالات كاش (Etisalat Cash)',
+          enabled: false,
+          account_name: '',
+          account_number: '',
+          instructions: 'قم بالتحويل عبر محفظة اتصالات كاش، ثم اكتب رقم المحفظة المحول منها.'
+        },
+        {
+          id: 'we_pay',
+          name: 'وي باي (WE Pay)',
+          enabled: false,
+          account_name: '',
+          account_number: '',
+          instructions: 'قم بالتحويل عبر محفظة WE Pay، ثم اكتب رقم المحفظة ورقم المعاملة.'
+        }
+      ],
+      general_instructions: 'يرجى تحويل القيمة الدقيقة للباقة بالجنيه المصري، وتوثيق اسم المحول ورقم العملية. يتم مراجعة الحسابات واعتماد الكوينز يدوياً من قبل إدارة المنصة بعد التأكد البنكي.',
+      warning_notice: 'تنبيه هام: لا يتم إيداع الكوينز تلقائياً بمجرد إرسال الطلب، بل بعد التحقق اليدوي البنكي من وصول التحويل إلى المحفظة الرسمية للمالك.'
+    });
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('payment_methods_config', ?)", [defaultPaymentConfig]);
   }
 
   // Seed Truth or Dare Questions
@@ -1231,4 +1324,89 @@ export function queryAll<T = any>(db: SqlDatabase, sql: string, params: any[] = 
 export function queryOne<T = any>(db: SqlDatabase, sql: string, params: any[] = []): T | null {
   const rows = queryAll<T>(db, sql, params);
   return rows.length > 0 ? rows[0] : null;
+}
+
+export interface WalletTransactionResult {
+  success: boolean;
+  txId: string;
+  balanceBefore: number;
+  balanceAfter: number;
+  isIdempotentReplay?: boolean;
+}
+
+/**
+ * Server-authoritative, atomic wallet balance execution.
+ * Enforces:
+ * 1. Database-level read and update of real coin balance
+ * 2. Strict prevention of negative balance
+ * 3. Idempotency checking via unique (user_id, idempotency_key)
+ * 4. Immutable audit trail with balance_before and balance_after
+ */
+export function executeWalletTransaction(
+  db: SqlDatabase,
+  params: {
+    userId: string;
+    amount: number;
+    type: string;
+    description: string;
+    relatedUserId?: string | null;
+    idempotencyKey?: string | null;
+  }
+): WalletTransactionResult {
+  if (params.idempotencyKey) {
+    const existing = queryOne(
+      db,
+      "SELECT id, balance_before, balance_after FROM wallet_transactions WHERE user_id = ? AND idempotency_key = ?",
+      [params.userId, params.idempotencyKey]
+    );
+    if (existing) {
+      return {
+        success: true,
+        txId: existing.id,
+        balanceBefore: existing.balance_before,
+        balanceAfter: existing.balance_after,
+        isIdempotentReplay: true
+      };
+    }
+  }
+
+  const user = queryOne(db, "SELECT coins FROM users WHERE id = ?", [params.userId]);
+  if (!user) {
+    throw new Error('المستخدم غير موجود');
+  }
+
+  const balanceBefore = user.coins || 0;
+  const balanceAfter = balanceBefore + params.amount;
+
+  if (balanceAfter < 0) {
+    throw new Error(`رصيد الكوينز غير كافٍ. تحتاج إلى ${Math.abs(params.amount)} كوينز (رصيدك الحالي: ${balanceBefore})`);
+  }
+
+  const txId = 'tx_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+
+  db.run("UPDATE users SET coins = ? WHERE id = ?", [balanceAfter, params.userId]);
+  db.run(
+    `INSERT INTO wallet_transactions
+     (id, user_id, amount, type, description, related_user_id, balance_before, balance_after, idempotency_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      txId,
+      params.userId,
+      params.amount,
+      params.type,
+      params.description,
+      params.relatedUserId || null,
+      balanceBefore,
+      balanceAfter,
+      params.idempotencyKey || null
+    ]
+  );
+
+  return {
+    success: true,
+    txId,
+    balanceBefore,
+    balanceAfter,
+    isIdempotentReplay: false
+  };
 }

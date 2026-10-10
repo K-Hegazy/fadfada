@@ -5,7 +5,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import dotenv from 'dotenv';
-import { getDb, queryAll, queryOne, saveDb, saveDbSync } from './server/db.js';
+import { getDb, queryAll, queryOne, saveDb, saveDbSync, executeWalletTransaction } from './server/db.js';
 import {
   hashPassword,
   verifyPassword,
@@ -4019,7 +4019,7 @@ app.post('/api/gifts/send', requireAuth, giftRateLimiter, async (req: Request, r
     if (session.isGuest) {
       return res.status(403).json({ error: 'إرسال الهدايا متاح للأعضاء المسجلين فقط.' });
     }
-    const { receiverId, giftId, roomId } = req.body;
+    const { receiverId, giftId, roomId, idempotencyKey } = req.body;
 
     if (!receiverId || !giftId) {
       return res.status(400).json({ error: 'يرجى اختيار المستلم والهدية' });
@@ -4047,28 +4047,40 @@ app.post('/api/gifts/send', requireAuth, giftRateLimiter, async (req: Request, r
       return res.status(400).json({ error: `رصيدك من الكوينز غير كافٍ. سعر الهدية: ${gift.price_coins} كوينز` });
     }
 
-    const tx1 = 'tx_' + Math.random().toString(36).substring(2, 9);
-    const tx2 = 'tx_' + Math.random().toString(36).substring(2, 9);
     const gtxId = 'gtx_' + Math.random().toString(36).substring(2, 9);
     const receiverGain = Math.floor(gift.price_coins * 0.5);
 
     db.run("BEGIN TRANSACTION");
+    let senderTx;
     try {
-      // Deduct from sender
-      db.run("UPDATE users SET coins = coins - ? WHERE id = ?", [gift.price_coins, session.userId]);
+      // 1. Deduct from sender with atomic transaction and balance tracking
+      senderTx = executeWalletTransaction(db, {
+        userId: session.userId,
+        amount: -gift.price_coins,
+        type: 'gift_sent',
+        description: `إرسال هدية (${gift.arabic_name})`,
+        relatedUserId: receiverId,
+        idempotencyKey: idempotencyKey ? `gift_s_${idempotencyKey}` : null
+      });
 
-      // Send part to receiver (50% value converted to coins)
-      db.run("UPDATE users SET coins = coins + ? WHERE id = ?", [receiverGain, receiverId]);
+      if (senderTx.isIdempotentReplay) {
+        db.run("COMMIT");
+        return res.json({
+          success: true,
+          message: `تم إرسال ${gift.arabic_name} بنجاح مسبقاً!`,
+          newBalance: senderTx.balanceAfter
+        });
+      }
 
-      // Log transactions
-      db.run(
-        "INSERT INTO wallet_transactions (id, user_id, amount, type, description, related_user_id) VALUES (?, ?, ?, 'gift_sent', ?, ?)",
-        [tx1, session.userId, -gift.price_coins, `إرسال هدية (${gift.arabic_name})`, receiverId]
-      );
-      db.run(
-        "INSERT INTO wallet_transactions (id, user_id, amount, type, description, related_user_id) VALUES (?, ?, ?, 'gift_received', ?, ?)",
-        [tx2, receiverId, receiverGain, `استلام هدية (${gift.arabic_name}) من ${session.username}`, session.userId]
-      );
+      // 2. Exact 50% reward to receiver with atomic balance tracking
+      executeWalletTransaction(db, {
+        userId: receiverId,
+        amount: receiverGain,
+        type: 'gift_received',
+        description: `استلام هدية (${gift.arabic_name}) من ${session.username}`,
+        relatedUserId: session.userId,
+        idempotencyKey: idempotencyKey ? `gift_r_${idempotencyKey}` : null
+      });
 
       // Save gift transaction
       db.run(
@@ -4108,16 +4120,16 @@ app.post('/api/gifts/send', requireAuth, giftRateLimiter, async (req: Request, r
     return res.json({
       success: true,
       message: `تم إرسال ${gift.arabic_name} بنجاح!`,
-      newBalance: sender.coins - gift.price_coins
+      newBalance: senderTx.balanceAfter
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Send gift error:', error);
-    return res.status(500).json({ error: 'خطأ أثناء إرسال الهدية' });
+    return res.status(500).json({ error: error.message || 'خطأ أثناء إرسال الهدية' });
   }
 });
 
 // ==========================================
-// COIN PACKAGES & MONETIZATION SIMULATION
+// COIN PACKAGES & MONETIZATION
 // ==========================================
 
 // Get Active Coin Packages
@@ -4146,36 +4158,69 @@ app.get('/api/coins/packages', async (req: Request, res: Response) => {
   }
 });
 
-// Purchase / Recharge Coins Package (Sandbox Simulation - الوضع التجريبي دون خصم أموال حقيقية)
+// Purchase / Recharge Coins Package (Sandbox Simulation - strictly Owner only in test environment)
 app.post('/api/coins/purchase', requireAuth, async (req: Request, res: Response) => {
   try {
     const session = (req as any).user as UserSession;
     if (session.isGuest) {
-      return res.status(403).json({ error: 'شحن الكوينز متاح فقط للحسابات المسجلة. يرجى إنشاء حساب مجاني أو تسجيل الدخول!' });
+      return res.status(403).json({ error: 'شحن الكوينز متاح فقط للحسابات المسجلة.' });
     }
-    const { packageId } = req.body;
+
+    // 1. Production Protection: completely disable simulated recharge in production
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction) {
+      return res.status(403).json({
+        error: 'الشحن التجريبي معطّل تماماً في بيئة الإنتاج. سيتم فتح الشحن فور تفعيل بوابة الدفع الإلكتروني المعتمدة.'
+      });
+    }
+
+    const db = await getDb();
+
+    // 2. Role Verification: ONLY Owner Hegazy is authorized to execute test recharge
+    const ownerCheck = verifyOwnerHegazy(db, session);
+    if (!ownerCheck.ok) {
+      return res.status(403).json({
+        error: 'غير مصرح: الشحن التجريبي محصور حصراً بحساب مالك المنصة (Hegazy) في بيئة الاختبار. لا يمكن للأعضاء شحن كوينز مجانية.'
+      });
+    }
+
+    const { packageId, idempotencyKey } = req.body;
     if (!packageId) {
       return res.status(400).json({ error: 'يرجى تحديد باقة الكوينز المطلوبة' });
     }
 
-    const db = await getDb();
     const pkg = queryOne(db, "SELECT * FROM coin_packages WHERE id = ? AND is_active = 1", [packageId]);
     if (!pkg) {
       return res.status(404).json({ error: 'باقة الكوينز المطلوبة غير متاحة حالياً' });
     }
 
     const totalCoinsToAdd = (pkg.coins || 0) + (pkg.bonus_coins || 0);
-    const txId = 'tx_' + Math.random().toString(36).substring(2, 9);
-    const description = `شحن رصيد: ${pkg.name} (+${totalCoinsToAdd} كوينز) [محاكاة تجريبية]`;
+    const description = `شحن رصيد: ${pkg.name} (+${totalCoinsToAdd} كوينز) [اختبار تجريبي للمالك]`;
 
     db.run("BEGIN TRANSACTION");
+    let txRes;
     try {
-      db.run("UPDATE users SET coins = coins + ? WHERE id = ?", [totalCoinsToAdd, session.userId]);
+      txRes = executeWalletTransaction(db, {
+        userId: session.userId,
+        amount: totalCoinsToAdd,
+        type: 'coin_recharge_sim',
+        description,
+        idempotencyKey: idempotencyKey ? `sim_${idempotencyKey}` : null
+      });
+
+      // Avoid double XP on idempotent replay
+      if (!txRes.isIdempotentReplay) {
+        addXp(db, session.userId, Math.min(150, Math.floor(totalCoinsToAdd * 0.1)));
+      }
+
+      // Record in audit_logs
+      const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
       db.run(
-        "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'coin_recharge_sim', ?)",
-        [txId, session.userId, totalCoinsToAdd, description]
+        `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+         VALUES (?, ?, 'owner_sandbox_recharge', 'wallet', ?, ?)`,
+        [auditLogId, session.userId, txRes.txId, `شحن تجريبي لباقة ${pkg.name} (+${totalCoinsToAdd} كوينز) للمالك Hegazy`]
       );
-      addXp(db, session.userId, Math.min(150, Math.floor(totalCoinsToAdd * 0.1)));
+
       db.run("COMMIT");
     } catch (txErr) {
       db.run("ROLLBACK");
@@ -4183,20 +4228,538 @@ app.post('/api/coins/purchase', requireAuth, async (req: Request, res: Response)
     }
 
     saveDb();
-
-    // Broadcast presence update if needed
     broadcastOnlineStatus(session.userId, true);
 
     const updatedUser = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
     return res.json({
       success: true,
-      message: `مبروك! تم شحن ${totalCoinsToAdd.toLocaleString('ar-EG')} كوينز بنجاح في الوضع التجريبي. رصيدك الآن: ${(updatedUser?.coins || 0).toLocaleString('ar-EG')} كوينز`,
+      message: `تم شحن ${totalCoinsToAdd.toLocaleString('ar-EG')} كوينز بنجاح في وضع الاختبار للمالك. رصيدك الآن: ${(updatedUser?.coins || 0).toLocaleString('ar-EG')} كوينز`,
       coins: updatedUser?.coins || 0,
-      coinsAdded: totalCoinsToAdd
+      coinsAdded: totalCoinsToAdd,
+      isTestMode: true
+    });
+  } catch (error: any) {
+    console.error('Coin recharge simulation error:', error);
+    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء تنفيذ عملية الشحن التجريبية' });
+  }
+});
+
+// ==========================================
+// MANUAL TRANSFER PAYMENT SYSTEM (EGYPT / INSTAPAY / VODAFONE CASH / MANUAL WALLETS)
+// Server-authoritative, Owner-approved, Zero-Paymob dependency, Safe & Idempotent
+// ==========================================
+
+// Helper to get payment config from database
+function getPaymentMethodsConfig(db: any) {
+  const row = queryOne(db, "SELECT value FROM system_settings WHERE key = 'payment_methods_config'");
+  if (row?.value) {
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      // fallback
+    }
+  }
+  return {
+    manual_transfers_enabled: false,
+    methods: [],
+    general_instructions: '',
+    warning_notice: ''
+  };
+}
+
+// 1. Get payment methods & manual transfer instructions for users
+app.get('/api/payments/methods', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const config = getPaymentMethodsConfig(db);
+
+    // Filter to only enabled methods for public view
+    const activeMethods = (config.methods || [])
+      .filter((m: any) => m.enabled)
+      .map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        accountName: m.account_name,
+        accountHandle: m.account_handle || m.account_number,
+        instructions: m.instructions
+      }));
+
+    return res.json({
+      success: true,
+      currency: 'EGP',
+      country: 'EG',
+      manualTransfersEnabled: !!config.manual_transfers_enabled && activeMethods.length > 0,
+      methods: activeMethods,
+      generalInstructions: config.general_instructions || 'يرجى تحويل المبلغ بدقة، وتسجيل رقم العملية واسم المحول لمطابقة العملية.',
+      warningNotice: config.warning_notice || 'تنبيه: لا يتم إضافة الكوينز تلقائياً بمجرد إرسال الطلب، بل بعد التحقق اليدوي البنكي من وصول التحويل.'
     });
   } catch (error) {
-    console.error('Coin recharge simulation error:', error);
-    return res.status(500).json({ error: 'حدث خطأ أثناء تنفيذ عملية الشحن التجريبية' });
+    console.error('Fetch payment methods error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب بيانات وسائل التحويل' });
+  }
+});
+
+// Backward-compatible alias for existing frontend checks
+app.get('/api/payments/config', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const config = getPaymentMethodsConfig(db);
+    const activeMethods = (config.methods || []).filter((m: any) => m.enabled);
+    const isReady = !!config.manual_transfers_enabled && activeMethods.length > 0;
+
+    return res.json({
+      isConfigured: isReady,
+      provider: 'تحويل يدوي مباشر (InstaPay / محافظ المحمول)',
+      country: 'EG',
+      currency: 'EGP',
+      status: isReady ? 'ready' : 'setup_pending',
+      supportedMethods: activeMethods.map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        icon: m.id === 'instapay' ? '⚡' : '📱'
+      })),
+      message: isReady
+        ? 'وسائل التحويل المباشر معتمدة ومفعلة.'
+        : 'وسائل التحويل المباشر قيد الإعداد من قبل إدارة المنصة.'
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'خطأ في جلب حالة وسائل الدفع' });
+  }
+});
+
+// 2. Create manual recharge order (User submits transfer details after transferring)
+app.post('/api/payments/create-order', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.isGuest) {
+      return res.status(403).json({ error: 'عمليات الشحن مخصصة للأعضاء المسجلين فقط.' });
+    }
+
+    const {
+      packageId,
+      transferMethod,
+      senderName,
+      senderPhoneOrHandle,
+      transactionReference,
+      receiptNote
+    } = req.body;
+
+    if (!packageId) {
+      return res.status(400).json({ error: 'يرجى تحديد باقة الكوينز' });
+    }
+    if (!transferMethod) {
+      return res.status(400).json({ error: 'يرجى اختيار وسيلة التحويل المستخدمة' });
+    }
+    if (!senderName || !senderName.trim()) {
+      return res.status(400).json({ error: 'يرجى كتابة اسم صاحب الحساب أو المحفظة المحول منها' });
+    }
+    if (!senderPhoneOrHandle || !senderPhoneOrHandle.trim()) {
+      return res.status(400).json({ error: 'يرجى كتابة رقم الهاتف أو عنوان InstaPay المحول منه' });
+    }
+
+    const db = await getDb();
+    const pkg = queryOne(db, "SELECT * FROM coin_packages WHERE id = ? AND is_active = 1", [packageId]);
+    if (!pkg) {
+      return res.status(404).json({ error: 'الباقة المحددة غير متاحة حالياً' });
+    }
+
+    const config = getPaymentMethodsConfig(db);
+    if (!config.manual_transfers_enabled) {
+      return res.status(400).json({
+        error: 'خدمة التحويل المباشر غير مفعلة حالياً من قبل إدارة المنصة.'
+      });
+    }
+
+    const methodMatch = (config.methods || []).find((m: any) => m.id === transferMethod && m.enabled);
+    if (!methodMatch) {
+      return res.status(400).json({
+        error: 'وسيلة التحويل المحددة غير مفعلة في الوقت الحالي.'
+      });
+    }
+
+    const orderId = 'ord_' + Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');
+    const amountCents = Math.round(pkg.price_amount * 100);
+
+    db.run(
+      `INSERT INTO payment_orders
+       (id, user_id, package_id, amount_cents, currency, provider, transfer_method,
+        sender_name, sender_phone_or_handle, transaction_reference, receipt_note, status)
+       VALUES (?, ?, ?, ?, 'EGP', 'manual_transfer', ?, ?, ?, ?, ?, 'pending')`,
+      [
+        orderId,
+        session.userId,
+        pkg.id,
+        amountCents,
+        transferMethod,
+        senderName.trim(),
+        senderPhoneOrHandle.trim(),
+        (transactionReference || '').trim(),
+        (receiptNote || '').trim()
+      ]
+    );
+
+    saveDb();
+
+    return res.json({
+      success: true,
+      orderId,
+      status: 'pending',
+      amount: pkg.price_amount,
+      currency: 'EGP',
+      packageName: pkg.name,
+      coins: pkg.coins,
+      bonusCoins: pkg.bonus_coins || 0,
+      message: 'تم تسجيل طلب الشحن بنجاح وهو الآن قيد المراجعة والتحقق اليدوي من قبل إدارة المنصة.'
+    });
+  } catch (error) {
+    console.error('Create payment order error:', error);
+    return res.status(500).json({ error: 'حدث خطأ أثناء تسجيل طلب الشحن' });
+  }
+});
+
+// 3. User: Get my payment orders history
+app.get('/api/payments/my-orders', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const db = await getDb();
+
+    const orders = queryAll(
+      db,
+      `SELECT po.*,
+              cp.name as package_name,
+              cp.coins as package_coins,
+              cp.bonus_coins as package_bonus_coins,
+              cp.price_amount as package_price
+       FROM payment_orders po
+       LEFT JOIN coin_packages cp ON po.package_id = cp.id
+       WHERE po.user_id = ?
+       ORDER BY po.created_at DESC
+       LIMIT 50`,
+      [session.userId]
+    );
+
+    return res.json({
+      orders: orders.map((o: any) => ({
+        id: o.id,
+        packageName: o.package_name || 'باقة كوينز',
+        coins: o.package_coins || 0,
+        bonusCoins: o.package_bonus_coins || 0,
+        amount: (o.amount_cents || 0) / 100,
+        currency: o.currency || 'EGP',
+        transferMethod: o.transfer_method || o.provider,
+        senderName: o.sender_name,
+        senderPhoneOrHandle: o.sender_phone_or_handle,
+        transactionReference: o.transaction_reference,
+        receiptNote: o.receipt_note,
+        status: o.status,
+        adminNotes: o.admin_notes,
+        createdAt: o.created_at,
+        reviewedAt: o.reviewed_at || o.fulfilled_at
+      }))
+    });
+  } catch (error) {
+    console.error('Fetch my payment orders error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب سجل طلبات الشحن' });
+  }
+});
+
+// ==========================================
+// OWNER PAYMENT SETTINGS & ORDER APPROVALS
+// ==========================================
+
+// 4. Owner: Get full payment methods settings
+app.get('/api/admin/payment-settings', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const config = getPaymentMethodsConfig(db);
+    return res.json({
+      success: true,
+      config
+    });
+  } catch (error) {
+    console.error('Fetch admin payment settings error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب إعدادات الدفع' });
+  }
+});
+
+// 5. Owner: Update payment methods settings
+app.post('/api/admin/payment-settings', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { manual_transfers_enabled, methods, general_instructions, warning_notice } = req.body;
+
+    if (!Array.isArray(methods)) {
+      return res.status(400).json({ error: 'بيانات وسائل التحويل غير صالحة' });
+    }
+
+    const db = await getDb();
+    const newConfig = {
+      manual_transfers_enabled: !!manual_transfers_enabled,
+      methods: methods.map((m: any) => ({
+        id: String(m.id || '').trim(),
+        name: String(m.name || '').trim(),
+        enabled: !!m.enabled,
+        account_name: String(m.account_name || '').trim(),
+        account_handle: String(m.account_handle || m.account_number || '').trim(),
+        account_number: String(m.account_number || m.account_handle || '').trim(),
+        instructions: String(m.instructions || '').trim()
+      })),
+      general_instructions: String(general_instructions || '').trim(),
+      warning_notice: String(warning_notice || '').trim()
+    };
+
+    db.run(
+      "INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES ('payment_methods_config', ?, CURRENT_TIMESTAMP)",
+      [JSON.stringify(newConfig)]
+    );
+
+    // Audit log
+    const auditId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'update_payment_settings', 'system_settings', 'payment_methods_config', ?)`,
+      [auditId, session.userId, `تحديث إعدادات ووسائل التحويل المباشر (التفعيل: ${newConfig.manual_transfers_enabled ? 'مفعل' : 'معطل'})`]
+    );
+
+    saveDb();
+    return res.json({
+      success: true,
+      message: 'تم حفظ إعدادات وسائل التحويل والاستقبال بنجاح',
+      config: newConfig
+    });
+  } catch (error) {
+    console.error('Update payment settings error:', error);
+    return res.status(500).json({ error: 'خطأ في تحديث إعدادات الدفع' });
+  }
+});
+
+// 6. Owner: Get all recharge orders with user details and status filter
+app.get('/api/admin/payment-orders', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const { status } = req.query;
+    const db = await getDb();
+
+    let sql = `
+      SELECT po.*,
+             u.username,
+             u.display_name,
+             u.avatar,
+             cp.name as package_name,
+             cp.coins as package_coins,
+             cp.bonus_coins as package_bonus_coins,
+             cp.price_amount as package_price
+      FROM payment_orders po
+      JOIN users u ON po.user_id = u.id
+      LEFT JOIN coin_packages cp ON po.package_id = cp.id
+    `;
+    const params: any[] = [];
+
+    if (status && status !== 'all') {
+      sql += ' WHERE po.status = ?';
+      params.push(status);
+    }
+
+    sql += ' ORDER BY po.created_at DESC LIMIT 100';
+
+    const rows = queryAll(db, sql, params);
+
+    return res.json({
+      orders: rows.map((r: any) => ({
+        id: r.id,
+        userId: r.user_id,
+        username: r.username,
+        displayName: r.display_name || r.username,
+        avatar: r.avatar,
+        packageName: r.package_name || 'باقة كوينز',
+        packageCoins: r.package_coins || 0,
+        packageBonusCoins: r.package_bonus_coins || 0,
+        amount: (r.amount_cents || 0) / 100,
+        currency: r.currency || 'EGP',
+        transferMethod: r.transfer_method || r.provider,
+        senderName: r.sender_name,
+        senderPhoneOrHandle: r.sender_phone_or_handle,
+        transactionReference: r.transaction_reference,
+        receiptNote: r.receipt_note,
+        status: r.status,
+        adminNotes: r.admin_notes,
+        createdAt: r.created_at,
+        reviewedAt: r.reviewed_at || r.fulfilled_at,
+        reviewedBy: r.reviewed_by
+      }))
+    });
+  } catch (error) {
+    console.error('Fetch admin payment orders error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب طلبات الشحن' });
+  }
+});
+
+// 7. Owner: Approve recharge order (Idempotent, Atomic transaction, Strict check)
+app.post('/api/admin/payment-orders/:id/approve', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { id } = req.params;
+    const { notes } = req.body;
+
+    const db = await getDb();
+    const order = queryOne(db, "SELECT * FROM payment_orders WHERE id = ?", [id]);
+    if (!order) {
+      return res.status(404).json({ error: 'طلب الشحن غير موجود' });
+    }
+
+    if (order.status !== 'pending') {
+      return res.status(400).json({
+        error: `لا يمكن اعتماد هذا الطلب لأنه معالج مسبقاً بحالة (${order.status === 'approved' ? 'معتمد بالفعل' : order.status})`
+      });
+    }
+
+    const pkg = queryOne(db, "SELECT * FROM coin_packages WHERE id = ?", [order.package_id]);
+    if (!pkg) {
+      return res.status(404).json({ error: 'باقة الكوينز المرتبطة بالطلب غير موجودة' });
+    }
+
+    const totalCoins = (pkg.coins || 0) + (pkg.bonus_coins || 0);
+
+    db.run("BEGIN TRANSACTION");
+    try {
+      // Atomic wallet credit with idempotency key
+      executeWalletTransaction(db, {
+        userId: order.user_id,
+        amount: totalCoins,
+        type: 'manual_recharge_approved',
+        description: `شحن رصيد معتمد (${pkg.name}) عبر تحويل يدوي [${order.transfer_method || 'instapay'}]`,
+        idempotencyKey: `approved_order_${order.id}`
+      });
+
+      // Update order status
+      db.run(
+        `UPDATE payment_orders
+         SET status = 'approved',
+             fulfilled_at = CURRENT_TIMESTAMP,
+             reviewed_by = ?,
+             reviewed_at = CURRENT_TIMESTAMP,
+             admin_notes = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [session.userId, notes || 'تم التحقق من استلام التحويل البنكي واعتماد الكوينز', order.id]
+      );
+
+      // Notification to user
+      const notifId = 'notif_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+      db.run(
+        `INSERT INTO notifications (id, user_id, actor_id, type, title, content, link)
+         VALUES (?, ?, ?, 'wallet', 'تم اعتماد طلب شحن الكوينز بنجاح! 🪙', ?, '/wallet')`,
+        [
+          notifId,
+          order.user_id,
+          session.userId,
+          `تم تأكيد استلام تحويلك بنجاح وإيداع ${totalCoins.toLocaleString('ar-EG')} كوينز في محفظتك!`
+        ]
+      );
+
+      // Audit log
+      const auditId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+      db.run(
+        `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+         VALUES (?, ?, 'approve_recharge_order', 'payment_order', ?, ?)`,
+        [
+          auditId,
+          session.userId,
+          order.id,
+          `اعتماد طلب شحن رقم ${order.id} للمستخدم ${order.user_id} بمقدار ${totalCoins} كوينز (المبلغ: ${(order.amount_cents || 0) / 100} ج.م)`
+        ]
+      );
+
+      db.run("COMMIT");
+    } catch (err) {
+      db.run("ROLLBACK");
+      throw err;
+    }
+
+    saveDb();
+    broadcastOnlineStatus(order.user_id, true);
+
+    return res.json({
+      success: true,
+      message: `تم اعتماد الطلب بنجاح وإيداع ${totalCoins.toLocaleString('ar-EG')} كوينز في محفظة المستخدم.`
+    });
+  } catch (error: any) {
+    console.error('Approve payment order error:', error);
+    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء اعتماد طلب الشحن' });
+  }
+});
+
+// 8. Owner: Reject recharge order
+app.post('/api/admin/payment-orders/:id/reject', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const db = await getDb();
+    const order = queryOne(db, "SELECT * FROM payment_orders WHERE id = ?", [id]);
+    if (!order) {
+      return res.status(404).json({ error: 'طلب الشحن غير موجود' });
+    }
+
+    if (order.status !== 'pending') {
+      return res.status(400).json({
+        error: `لا يمكن رفض هذا الطلب لأنه معالج مسبقاً بحالة (${order.status})`
+      });
+    }
+
+    db.run("BEGIN TRANSACTION");
+    try {
+      db.run(
+        `UPDATE payment_orders
+         SET status = 'rejected',
+             reviewed_by = ?,
+             reviewed_at = CURRENT_TIMESTAMP,
+             admin_notes = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [session.userId, reason || 'تعذر مطابقة التحويل مع الحساب البنكي', order.id]
+      );
+
+      // Notification to user
+      const notifId = 'notif_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+      db.run(
+        `INSERT INTO notifications (id, user_id, actor_id, type, title, content, link)
+         VALUES (?, ?, ?, 'wallet', 'تعذر اعتماد طلب شحن الكوينز', ?, '/wallet')`,
+        [
+          notifId,
+          order.user_id,
+          session.userId,
+          `نعتذر، لم نتمكن من اعتماد طلب الشحن رقم (${order.id}). السبب: ${reason || 'يرجى مراجعة إدارة المنصة وتأكيد بيانات التحويل.'}`
+        ]
+      );
+
+      // Audit log
+      const auditId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+      db.run(
+        `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+         VALUES (?, ?, 'reject_recharge_order', 'payment_order', ?, ?)`,
+        [
+          auditId,
+          session.userId,
+          order.id,
+          `رفض طلب الشحن رقم ${order.id} للمستخدم ${order.user_id}. السبب: ${reason || 'غير محدد'}`
+        ]
+      );
+
+      db.run("COMMIT");
+    } catch (err) {
+      db.run("ROLLBACK");
+      throw err;
+    }
+
+    saveDb();
+    return res.json({
+      success: true,
+      message: 'تم رفض طلب الشحن وتنبيه المستخدم بالسبب.'
+    });
+  } catch (error: any) {
+    console.error('Reject payment order error:', error);
+    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء رفض طلب الشحن' });
   }
 });
 
@@ -4235,7 +4798,11 @@ app.post('/api/vip/purchase', requireAuth, async (req: Request, res: Response) =
     if (session.isGuest) {
       return res.status(403).json({ error: 'عضويات وميزات VIP مخصصة للحسابات المسجلة فقط. يرجى إنشاء حساب مجاني!' });
     }
-    const { tier } = req.body; // 'bronze', 'silver', 'gold', 'royal' or custom
+    const { tier, idempotencyKey } = req.body; // 'bronze', 'silver', 'gold', 'royal' or custom
+
+    if (!tier) {
+      return res.status(400).json({ error: 'يرجى تحديد باقة VIP المطلوبة' });
+    }
 
     const db = await getDb();
     const plan = queryOne(db, "SELECT * FROM vip_plans WHERE id = ? AND is_active = 1", [tier]);
@@ -4258,22 +4825,26 @@ app.post('/api/vip/purchase', requireAuth, async (req: Request, res: Response) =
     }
 
     const expiresAt = new Date(baseTime + plan.days * 24 * 60 * 60 * 1000).toISOString();
-    const remainingCoins = user.coins - plan.price_coins;
-    const txId = 'tx_' + Math.random().toString(36).substring(2, 9);
 
     db.run("BEGIN TRANSACTION");
+    let txRes;
     try {
-      db.run(
-        "UPDATE users SET coins = coins - ?, vip_level = ?, vip_expires_at = ? WHERE id = ?",
-        [plan.price_coins, tier, expiresAt, session.userId]
-      );
+      txRes = executeWalletTransaction(db, {
+        userId: session.userId,
+        amount: -plan.price_coins,
+        type: 'vip_purchase',
+        description: `ترقية / تجديد اشتراك ${plan.name}`,
+        idempotencyKey: idempotencyKey ? `vip_${idempotencyKey}` : null
+      });
 
-      db.run(
-        "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'vip_purchase', ?)",
-        [txId, session.userId, -plan.price_coins, `ترقية / تجديد اشتراك ${plan.name}`]
-      );
+      if (!txRes.isIdempotentReplay) {
+        db.run(
+          "UPDATE users SET vip_level = ?, vip_expires_at = ? WHERE id = ?",
+          [tier, expiresAt, session.userId]
+        );
+        addXp(db, session.userId, 200);
+      }
 
-      addXp(db, session.userId, 200);
       db.run("COMMIT");
     } catch (txErr) {
       db.run("ROLLBACK");
@@ -4281,19 +4852,18 @@ app.post('/api/vip/purchase', requireAuth, async (req: Request, res: Response) =
     }
 
     saveDb();
-
     broadcastOnlineStatus(session.userId, isUserOnline(session.userId));
 
     return res.json({
       success: true,
       vipLevel: tier,
       vipExpiresAt: expiresAt,
-      coins: remainingCoins,
+      coins: txRes.balanceAfter,
       message: `مبروك! تم تفعيل اشتراك ${plan.name} بنجاح!`
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('VIP purchase error:', error);
-    return res.status(500).json({ error: 'خطأ في ترقية VIP' });
+    return res.status(500).json({ error: error.message || 'خطأ في ترقية VIP' });
   }
 });
 
@@ -5497,6 +6067,14 @@ app.put('/api/admin/vip/plans/:id', requireAuth, requireOwner, async (req: Reque
       throw txErr;
     }
 
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'update_vip_plan', 'vip_plan', ?, ?)`,
+      [auditLogId, session.userId, id, `تعديل باقة VIP (${name || existing.name}) بواسطة المالك Hegazy`]
+    );
+
     saveDb();
     return res.json({ success: true, message: `تم تحديث باقة "${name || existing.name}" بنجاح!` });
   } catch (error) {
@@ -5508,6 +6086,7 @@ app.put('/api/admin/vip/plans/:id', requireAuth, requireOwner, async (req: Reque
 // Create VIP Plan (Owner Hegazy Only)
 app.post('/api/admin/vip/plans', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
+    const session = (req as any).user as UserSession;
     const { id, name, icon, badge, color, border, text, priceCoins, days, popular, isActive, perks, displayOrder } = req.body;
     if (!id || !name || priceCoins === undefined) {
       return res.status(400).json({ error: 'يرجى إدخال معرف الباقة والاسم وسعر الكوينز' });
@@ -5549,6 +6128,14 @@ app.post('/api/admin/vip/plans', requireAuth, requireOwner, async (req: Request,
       throw txErr;
     }
 
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'create_vip_plan', 'vip_plan', ?, ?)`,
+      [auditLogId, session.userId, cleanId, `إنشاء باقة VIP جديدة: ${name.trim()} بسعر ${priceCoins} كوينز`]
+    );
+
     saveDb();
     return res.json({ success: true, message: `تم إنشاء باقة VIP الجديدة (${name}) بنجاح!`, planId: cleanId });
   } catch (error) {
@@ -5560,9 +6147,19 @@ app.post('/api/admin/vip/plans', requireAuth, requireOwner, async (req: Request,
 // Delete VIP Plan (Owner Hegazy Only)
 app.delete('/api/admin/vip/plans/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
+    const session = (req as any).user as UserSession;
     const id = req.params.id;
     const db = await getDb();
     db.run("DELETE FROM vip_plans WHERE id = ?", [id]);
+
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'delete_vip_plan', 'vip_plan', ?, ?)`,
+      [auditLogId, session.userId, id, `حذف باقة VIP معرف: ${id}`]
+    );
+
     saveDb();
     return res.json({ success: true, message: 'تم حذف الباقة بنجاح' });
   } catch (error) {
@@ -5620,13 +6217,28 @@ app.post('/api/admin/users/:id/coins', requireAuth, requireOwner, async (req: Re
       db.run("UPDATE users SET coins = ? WHERE id = ?", [newCoins, targetUserId]);
 
       db.run(
-        "INSERT INTO wallet_transactions (id, user_id, amount, type, description, related_user_id) VALUES (?, ?, ?, 'admin_adjustment', ?, ?)",
-        [txId, targetUserId, diff, txDesc, session.userId]
+        `INSERT INTO wallet_transactions
+         (id, user_id, amount, type, description, related_user_id, balance_before, balance_after)
+         VALUES (?, ?, ?, 'admin_adjustment', ?, ?, ?, ?)`,
+        [txId, targetUserId, diff, txDesc, session.userId, targetUser.coins, newCoins]
       );
 
       db.run(
         "INSERT INTO notifications (id, user_id, type, title, body, link) VALUES (?, ?, 'wallet_adjustment', ?, ?, '/wallet')",
         [notifId, targetUserId, notifTitle, notifBody]
+      );
+
+      // Audit log entry
+      const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+      db.run(
+        `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+         VALUES (?, ?, 'admin_adjust_coins', 'user', ?, ?)`,
+        [
+          auditLogId,
+          session.userId,
+          targetUserId,
+          `تعديل رصيد المستخدم ${targetUser.username}: من ${targetUser.coins} إلى ${newCoins} (${diff >= 0 ? '+' : ''}${diff} كوينز). ${reason ? `السبب: ${reason}` : ''}`
+        ]
       );
 
       db.run("COMMIT");
@@ -5850,6 +6462,16 @@ app.post('/api/admin/coins/packages', requireAuth, requireOwner, async (req: Req
         displayOrder ? parseInt(displayOrder, 10) : 0
       ]
     );
+
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    const session = (req as any).user as UserSession;
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'create_coin_package', 'coin_package', ?, ?)`,
+      [auditLogId, session.userId, cleanId, `إنشاء باقة كوينز: ${name.trim()} (${coins} كوينز بسعر ${priceAmount} ${currency || 'SAR'})`]
+    );
+
     saveDb();
 
     return res.json({ success: true, message: `تمت إضافة باقة الكوينز (${name}) بنجاح!`, packageId: cleanId });
@@ -5862,6 +6484,7 @@ app.post('/api/admin/coins/packages', requireAuth, requireOwner, async (req: Req
 // Admin/Owner: Update Coin Package
 app.put('/api/admin/coins/packages/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
+    const session = (req as any).user as UserSession;
     const id = req.params.id;
     const { name, coins, bonusCoins, priceAmount, currency, icon, badge, color, popular, isActive, displayOrder } = req.body;
     const db = await getDb();
@@ -5891,6 +6514,15 @@ app.put('/api/admin/coins/packages/:id', requireAuth, requireOwner, async (req: 
         id
       ]
     );
+
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'update_coin_package', 'coin_package', ?, ?)`,
+      [auditLogId, session.userId, id, `تعديل باقة كوينز معرف: ${id} (${name || ''})`]
+    );
+
     saveDb();
 
     return res.json({ success: true, message: 'تم تحديث بيانات باقة الكوينز بنجاح' });
@@ -5903,14 +6535,43 @@ app.put('/api/admin/coins/packages/:id', requireAuth, requireOwner, async (req: 
 // Admin/Owner: Delete Coin Package
 app.delete('/api/admin/coins/packages/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
+    const session = (req as any).user as UserSession;
     const id = req.params.id;
     const db = await getDb();
     db.run("DELETE FROM coin_packages WHERE id = ?", [id]);
+
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'delete_coin_package', 'coin_package', ?, ?)`,
+      [auditLogId, session.userId, id, `حذف باقة كوينز معرف: ${id}`]
+    );
+
     saveDb();
     return res.json({ success: true, message: 'تم حذف باقة الكوينز بنجاح' });
   } catch (error) {
     console.error('Delete coin package error:', error);
     return res.status(500).json({ error: 'فشل حذف باقة الكوينز' });
+  }
+});
+
+// Admin/Owner: Get Audit Logs (Hegazy Only)
+app.get('/api/admin/audit-logs', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const logs = queryAll(
+      db,
+      `SELECT al.*, u.username as actor_name, u.role as actor_role
+       FROM audit_logs al
+       LEFT JOIN users u ON al.actor_id = u.id
+       ORDER BY al.created_at DESC
+       LIMIT 100`
+    );
+    return res.json({ logs });
+  } catch (error) {
+    console.error('Fetch audit logs error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب سجل التدقيق' });
   }
 });
 
@@ -6107,7 +6768,7 @@ app.post('/api/shop/buy', requireAuth, async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'عذراً، المتجر متاح فقط للأعضاء المسجلين. يرجى إنشاء حساب مجاني.' });
     }
 
-    const { itemId } = req.body;
+    const { itemId, idempotencyKey } = req.body;
     if (!itemId) {
       return res.status(400).json({ error: 'يرجى تحديد العنصر المطلوب' });
     }
@@ -6147,38 +6808,41 @@ app.post('/api/shop/buy', requireAuth, async (req: Request, res: Response) => {
     }
 
     // Deduct coins securely inside database transaction
-    const txId = 'tx_' + crypto.randomUUID();
     const shouldAutoEquip = item.type === 'pin_profile' || item.type === 'card_frame' || item.type === 'badge';
     const invId = existing ? existing.id : ('inv_' + crypto.randomUUID());
 
     db.run("BEGIN TRANSACTION");
+    let txRes;
     try {
-      db.run("UPDATE users SET coins = coins - ? WHERE id = ?", [item.price_coins, session.userId]);
+      txRes = executeWalletTransaction(db, {
+        userId: session.userId,
+        amount: -item.price_coins,
+        type: 'shop_purchase',
+        description: `شراء من المتجر: ${item.name}`,
+        idempotencyKey: idempotencyKey ? `shop_${idempotencyKey}` : null
+      });
 
-      db.run(
-        "INSERT INTO wallet_transactions (id, user_id, amount, type, description) VALUES (?, ?, ?, 'shop_purchase', ?)",
-        [txId, session.userId, -item.price_coins, `شراء من المتجر: ${item.name}`]
-      );
+      if (!txRes.isIdempotentReplay) {
+        if (shouldAutoEquip) {
+          db.run(
+            `UPDATE user_inventory
+             SET is_equipped = 0
+             WHERE user_id = ? AND item_id IN (SELECT id FROM shop_items WHERE type = ?)`,
+            [session.userId, item.type]
+          );
+        }
 
-      if (shouldAutoEquip) {
-        db.run(
-          `UPDATE user_inventory
-           SET is_equipped = 0
-           WHERE user_id = ? AND item_id IN (SELECT id FROM shop_items WHERE type = ?)`,
-          [session.userId, item.type]
-        );
-      }
-
-      if (existing) {
-        db.run(
-          "UPDATE user_inventory SET expires_at = ?, is_equipped = ?, purchased_at = CURRENT_TIMESTAMP WHERE id = ?",
-          [expiresAt, shouldAutoEquip ? 1 : existing.is_equipped, existing.id]
-        );
-      } else {
-        db.run(
-          "INSERT INTO user_inventory (id, user_id, item_id, is_equipped, expires_at) VALUES (?, ?, ?, ?, ?)",
-          [invId, session.userId, itemId, shouldAutoEquip ? 1 : 0, expiresAt]
-        );
+        if (existing) {
+          db.run(
+            "UPDATE user_inventory SET expires_at = ?, is_equipped = ?, purchased_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [expiresAt, shouldAutoEquip ? 1 : existing.is_equipped, existing.id]
+          );
+        } else {
+          db.run(
+            "INSERT INTO user_inventory (id, user_id, item_id, is_equipped, expires_at) VALUES (?, ?, ?, ?, ?)",
+            [invId, session.userId, itemId, shouldAutoEquip ? 1 : 0, expiresAt]
+          );
+        }
       }
 
       db.run("COMMIT");
@@ -6192,16 +6856,14 @@ app.post('/api/shop/buy', requireAuth, async (req: Request, res: Response) => {
     // Broadcast presence update so badge/frame/pin reflects in realtime
     broadcastOnlineStatus(session.userId, true);
 
-    const updatedUser = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
-
     return res.json({
       success: true,
       message: `تم شراء "${item.name}" بنجاح!`,
-      coins: updatedUser?.coins || 0
+      coins: txRes.balanceAfter
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Purchase error:', error);
-    return res.status(500).json({ error: 'حدث خطأ أثناء عملية الشراء' });
+    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء عملية الشراء' });
   }
 });
 
@@ -6285,6 +6947,15 @@ app.post('/api/shop/items', requireAuth, requireOwner, async (req: Request, res:
       throw txErr;
     }
 
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    const session = (req as any).user as UserSession;
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'create_shop_item', 'shop_item', ?, ?)`,
+      [auditLogId, session.userId, id, `إضافة عنصر جديد بالمتجر: ${name.trim()} (${type}) بسعر ${priceCoins} كوينز`]
+    );
+
     saveDb();
 
     return res.json({ success: true, itemId: id });
@@ -6297,6 +6968,7 @@ app.post('/api/shop/items', requireAuth, requireOwner, async (req: Request, res:
 // Owner Hegazy Only: Edit Shop Item
 app.put('/api/shop/items/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
+    const session = (req as any).user as UserSession;
     const id = req.params.id;
     const { name, description, icon, priceCoins, durationHours, isActive, displayOrder, metadata } = req.body;
     const db = await getDb();
@@ -6337,6 +7009,14 @@ app.put('/api/shop/items/:id', requireAuth, requireOwner, async (req: Request, r
       throw txErr;
     }
 
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'update_shop_item', 'shop_item', ?, ?)`,
+      [auditLogId, session.userId, id, `تعديل عنصر المتجر معرف: ${id} (${name || existing.name})`]
+    );
+
     saveDb();
 
     return res.json({ success: true, message: 'تم تحديث العنصر بنجاح' });
@@ -6349,6 +7029,7 @@ app.put('/api/shop/items/:id', requireAuth, requireOwner, async (req: Request, r
 // Owner Hegazy Only: Delete / Disable Shop Item
 app.delete('/api/shop/items/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
+    const session = (req as any).user as UserSession;
     const id = req.params.id;
     const db = await getDb();
 
@@ -6360,6 +7041,14 @@ app.delete('/api/shop/items/:id', requireAuth, requireOwner, async (req: Request
       db.run("ROLLBACK");
       throw txErr;
     }
+
+    // Audit log
+    const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'disable_shop_item', 'shop_item', ?, ?)`,
+      [auditLogId, session.userId, id, `تعطيل عنصر المتجر معرف: ${id}`]
+    );
 
     saveDb();
 
