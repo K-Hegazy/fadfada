@@ -327,12 +327,23 @@ export const AdminPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (activeTab === 'overview') fetchOverview();
+    // Always keep payment orders updated for the owner
+    if (isOwner) {
+      fetchPaymentOrders();
+    }
+  }, [isOwner]);
+
+  useEffect(() => {
+    if (activeTab === 'overview') {
+      fetchOverview();
+      if (isOwner) fetchPaymentOrders();
+    }
     if (activeTab === 'users') fetchUsers();
     if (activeTab === 'wallet') {
       fetchEconomyStats();
       fetchCoinPackages();
       fetchUsers();
+      if (isOwner) fetchPaymentOrders();
     }
     if (activeTab === 'vip') {
       fetchVipPlans();
@@ -936,8 +947,23 @@ export const AdminPage: React.FC = () => {
               </p>
               <div className="flex flex-wrap gap-3 pt-2">
                 <button
+                  onClick={() => {
+                    setActiveTab('payments');
+                    setPaymentSubTab('orders');
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-neutral-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  <span>طلبات الشحن والتحويلات</span>
+                  {paymentOrdersList.filter(o => o.status === 'pending').length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black">
+                      {paymentOrdersList.filter(o => o.status === 'pending').length} جديدة
+                    </span>
+                  )}
+                </button>
+                <button
                   onClick={() => setActiveTab('wallet')}
-                  className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-neutral-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-amber-600/20 cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-amber-300 border border-amber-800/80 font-bold text-xs flex items-center gap-2 shadow-sm cursor-pointer"
                 >
                   <Coins className="w-4 h-4" />
                   إدارة المحفظة وتعديل الكوينز
@@ -1188,19 +1214,37 @@ export const AdminPage: React.FC = () => {
                 <p className="text-[11px] text-neutral-400 font-tajawal">يمكنك كمالك للمنصة إضافة أو خصم كوينز لأي حساب فورياً من جدول المستخدمين أدناه.</p>
               </div>
             </div>
-            <button
-              onClick={() => {
-                if (usersList.length > 0) {
-                  setWalletTargetUser(usersList[0]);
-                  setCoinsAmount(100);
-                  setCoinsOperation('add');
-                }
-              }}
-              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-neutral-950 font-black text-xs cursor-pointer shadow-md shrink-0 flex items-center justify-center gap-1.5"
-            >
-              <Coins className="w-3.5 h-3.5" />
-              <span>تعديل رصيد مستخدم الآن</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
+              <button
+                onClick={() => {
+                  setActiveTab('payments');
+                  setPaymentSubTab('orders');
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs cursor-pointer shadow-md flex items-center justify-center gap-1.5"
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>مراجعة طلبات الشحن والتحويلات</span>
+                {paymentOrdersList.filter(o => o.status === 'pending').length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black">
+                    {paymentOrdersList.filter(o => o.status === 'pending').length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  if (usersList.length > 0) {
+                    setWalletTargetUser(usersList[0]);
+                    setCoinsAmount(100);
+                    setCoinsOperation('add');
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs cursor-pointer shadow-md flex items-center justify-center gap-1.5"
+              >
+                <Coins className="w-3.5 h-3.5 text-amber-400" />
+                <span>تعديل رصيد مستخدم</span>
+              </button>
+            </div>
           </div>
 
           {/* COIN PACKAGES MANAGEMENT (إدارة باقات شحن الكوينز) */}
@@ -1212,7 +1256,7 @@ export const AdminPage: React.FC = () => {
                   <span>إدارة باقات شحن الكوينز (Coin Packages)</span>
                 </h3>
                 <p className="text-xs text-neutral-400 font-tajawal">
-                  تحديد أسعار الباقات بالريال السعودي أو العملات المعتمدة، كميات الكوينز، والبونص المجاني. تنعكس التعديلات لحظياً في المحفظة والمتجر.
+                  تحديد أسعار الباقات بالجنيه المصري (EGP)، كميات الكوينز، والبونص المجاني. تنعكس التعديلات لحظياً في المحفظة والمتجر.
                 </p>
               </div>
 
@@ -1966,7 +2010,7 @@ export const AdminPage: React.FC = () => {
             {[
               { id: 'all', label: 'الكل' },
               { id: 'admin_adjust_coins', label: 'تعديل المحافظ' },
-              { id: 'owner_sandbox_recharge', label: 'شحن تجريبي' },
+              { id: 'payment', label: 'طلبات الشحن اليدوي' },
               { id: 'vip', label: 'اشتراكات وباقات VIP' },
               { id: 'coin_package', label: 'باقات الكوينز' },
               { id: 'shop', label: 'المتجر' }

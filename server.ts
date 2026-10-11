@@ -4464,7 +4464,7 @@ app.get('/api/admin/payment-orders', requireAuth, requireOwner, async (req: Requ
       SELECT po.*,
              u.username,
              u.display_name,
-             u.avatar,
+             u.avatar_url as avatar,
              cp.name as package_name,
              cp.coins as package_coins,
              cp.bonus_coins as package_bonus_coins,
@@ -4490,7 +4490,7 @@ app.get('/api/admin/payment-orders', requireAuth, requireOwner, async (req: Requ
         userId: r.user_id,
         username: r.username,
         displayName: r.display_name || r.username,
-        avatar: r.avatar,
+        avatar: r.avatar || r.avatar_url,
         packageName: r.package_name || 'باقة كوينز',
         packageCoins: r.package_coins || 0,
         packageBonusCoins: r.package_bonus_coins || 0,
@@ -4567,12 +4567,11 @@ app.post('/api/admin/payment-orders/:id/approve', requireAuth, requireOwner, asy
       // Notification to user
       const notifId = 'notif_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
       db.run(
-        `INSERT INTO notifications (id, user_id, actor_id, type, title, content, link)
-         VALUES (?, ?, ?, 'wallet', 'تم اعتماد طلب شحن الكوينز بنجاح! 🪙', ?, '/wallet')`,
+        `INSERT INTO notifications (id, user_id, type, title, body, link)
+         VALUES (?, ?, 'wallet', 'تم اعتماد طلب شحن الكوينز بنجاح! 🪙', ?, '/wallet')`,
         [
           notifId,
           order.user_id,
-          session.userId,
           `تم تأكيد استلام تحويلك بنجاح وإيداع ${totalCoins.toLocaleString('ar-EG')} كوينز في محفظتك!`
         ]
       );
@@ -4644,12 +4643,11 @@ app.post('/api/admin/payment-orders/:id/reject', requireAuth, requireOwner, asyn
       // Notification to user
       const notifId = 'notif_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
       db.run(
-        `INSERT INTO notifications (id, user_id, actor_id, type, title, content, link)
-         VALUES (?, ?, ?, 'wallet', 'تعذر اعتماد طلب شحن الكوينز', ?, '/wallet')`,
+        `INSERT INTO notifications (id, user_id, type, title, body, link)
+         VALUES (?, ?, 'wallet', 'تعذر اعتماد طلب شحن الكوينز', ?, '/wallet')`,
         [
           notifId,
           order.user_id,
-          session.userId,
           `نعتذر، لم نتمكن من اعتماد طلب الشحن رقم (${order.id}). السبب: ${reason || 'يرجى مراجعة إدارة المنصة وتأكيد بيانات التحويل.'}`
         ]
       );
