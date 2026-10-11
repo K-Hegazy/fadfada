@@ -4143,7 +4143,7 @@ app.get('/api/coins/packages', async (req: Request, res: Response) => {
       coins: r.coins,
       bonusCoins: r.bonus_coins,
       priceAmount: r.price_amount,
-      currency: r.currency || 'SAR',
+      currency: r.currency || 'EGP',
       icon: r.icon || '🪙',
       badge: r.badge || '',
       color: r.color || 'from-amber-600 to-amber-900',
@@ -4158,90 +4158,11 @@ app.get('/api/coins/packages', async (req: Request, res: Response) => {
   }
 });
 
-// Purchase / Recharge Coins Package (Sandbox Simulation - strictly Owner only in test environment)
+// Purchase / Recharge Coins Package - Simulated recharge has been completely disabled
 app.post('/api/coins/purchase', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const session = (req as any).user as UserSession;
-    if (session.isGuest) {
-      return res.status(403).json({ error: 'شحن الكوينز متاح فقط للحسابات المسجلة.' });
-    }
-
-    // 1. Production Protection: completely disable simulated recharge in production
-    const isProduction = process.env.NODE_ENV === 'production';
-    if (isProduction) {
-      return res.status(403).json({
-        error: 'الشحن التجريبي معطّل تماماً في بيئة الإنتاج. سيتم فتح الشحن فور تفعيل بوابة الدفع الإلكتروني المعتمدة.'
-      });
-    }
-
-    const db = await getDb();
-
-    // 2. Role Verification: ONLY Owner Hegazy is authorized to execute test recharge
-    const ownerCheck = verifyOwnerHegazy(db, session);
-    if (!ownerCheck.ok) {
-      return res.status(403).json({
-        error: 'غير مصرح: الشحن التجريبي محصور حصراً بحساب مالك المنصة (Hegazy) في بيئة الاختبار. لا يمكن للأعضاء شحن كوينز مجانية.'
-      });
-    }
-
-    const { packageId, idempotencyKey } = req.body;
-    if (!packageId) {
-      return res.status(400).json({ error: 'يرجى تحديد باقة الكوينز المطلوبة' });
-    }
-
-    const pkg = queryOne(db, "SELECT * FROM coin_packages WHERE id = ? AND is_active = 1", [packageId]);
-    if (!pkg) {
-      return res.status(404).json({ error: 'باقة الكوينز المطلوبة غير متاحة حالياً' });
-    }
-
-    const totalCoinsToAdd = (pkg.coins || 0) + (pkg.bonus_coins || 0);
-    const description = `شحن رصيد: ${pkg.name} (+${totalCoinsToAdd} كوينز) [اختبار تجريبي للمالك]`;
-
-    db.run("BEGIN TRANSACTION");
-    let txRes;
-    try {
-      txRes = executeWalletTransaction(db, {
-        userId: session.userId,
-        amount: totalCoinsToAdd,
-        type: 'coin_recharge_sim',
-        description,
-        idempotencyKey: idempotencyKey ? `sim_${idempotencyKey}` : null
-      });
-
-      // Avoid double XP on idempotent replay
-      if (!txRes.isIdempotentReplay) {
-        addXp(db, session.userId, Math.min(150, Math.floor(totalCoinsToAdd * 0.1)));
-      }
-
-      // Record in audit_logs
-      const auditLogId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
-      db.run(
-        `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
-         VALUES (?, ?, 'owner_sandbox_recharge', 'wallet', ?, ?)`,
-        [auditLogId, session.userId, txRes.txId, `شحن تجريبي لباقة ${pkg.name} (+${totalCoinsToAdd} كوينز) للمالك Hegazy`]
-      );
-
-      db.run("COMMIT");
-    } catch (txErr) {
-      db.run("ROLLBACK");
-      throw txErr;
-    }
-
-    saveDb();
-    broadcastOnlineStatus(session.userId, true);
-
-    const updatedUser = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
-    return res.json({
-      success: true,
-      message: `تم شحن ${totalCoinsToAdd.toLocaleString('ar-EG')} كوينز بنجاح في وضع الاختبار للمالك. رصيدك الآن: ${(updatedUser?.coins || 0).toLocaleString('ar-EG')} كوينز`,
-      coins: updatedUser?.coins || 0,
-      coinsAdded: totalCoinsToAdd,
-      isTestMode: true
-    });
-  } catch (error: any) {
-    console.error('Coin recharge simulation error:', error);
-    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء تنفيذ عملية الشحن التجريبية' });
-  }
+  return res.status(400).json({
+    error: 'تم إلغاء الشحن التجريبي نهائياً بناءً على سياسة المنصة. يتم شحن الكوينز حصراً بالجنيه المصري (EGP) عبر التحويل المباشر لوسائل الدفع المعتمدة للمالك ومراجعته واعتماده يدوياً.'
+  });
 });
 
 // ==========================================
@@ -6018,6 +5939,7 @@ app.get('/api/admin/vip/plans', requireAuth, requireOwner, async (req: Request, 
 app.put('/api/admin/vip/plans/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
+    const session = (req as any).user as UserSession;
     const { name, icon, badge, color, border, text, priceCoins, days, popular, isActive, perks, displayOrder } = req.body;
     const db = await getDb();
 
@@ -6413,7 +6335,7 @@ app.get('/api/admin/coins/packages', requireAuth, requireOwner, async (req: Requ
       coins: r.coins,
       bonusCoins: r.bonus_coins,
       priceAmount: r.price_amount,
-      currency: r.currency || 'SAR',
+      currency: r.currency || 'EGP',
       icon: r.icon || '🪙',
       badge: r.badge || '',
       color: r.color || 'from-amber-600 to-amber-900',
@@ -6453,7 +6375,7 @@ app.post('/api/admin/coins/packages', requireAuth, requireOwner, async (req: Req
         parseInt(coins, 10),
         bonusCoins ? parseInt(bonusCoins, 10) : 0,
         parseFloat(priceAmount),
-        currency ? currency.trim() : 'SAR',
+        currency ? currency.trim() : 'EGP',
         icon || '🪙',
         badge ? badge.trim() : '',
         color || 'from-amber-600 to-amber-900',
@@ -6469,7 +6391,7 @@ app.post('/api/admin/coins/packages', requireAuth, requireOwner, async (req: Req
     db.run(
       `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
        VALUES (?, ?, 'create_coin_package', 'coin_package', ?, ?)`,
-      [auditLogId, session.userId, cleanId, `إنشاء باقة كوينز: ${name.trim()} (${coins} كوينز بسعر ${priceAmount} ${currency || 'SAR'})`]
+      [auditLogId, session.userId, cleanId, `إنشاء باقة كوينز: ${name.trim()} (${coins} كوينز بسعر ${priceAmount} ${currency || 'EGP'})`]
     );
 
     saveDb();
@@ -6504,7 +6426,7 @@ app.put('/api/admin/coins/packages/:id', requireAuth, requireOwner, async (req: 
         parseInt(coins, 10),
         bonusCoins !== undefined ? parseInt(bonusCoins, 10) : 0,
         parseFloat(priceAmount),
-        currency ? currency.trim() : 'SAR',
+        currency ? currency.trim() : 'EGP',
         icon || '🪙',
         badge ? badge.trim() : '',
         color || 'from-amber-600 to-amber-900',

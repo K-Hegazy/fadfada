@@ -108,6 +108,8 @@ export const AdminPage: React.FC = () => {
     free_attempts: 4,
     free_minutes_per_session: 5
   });
+  const [savingRandomSettings, setSavingRandomSettings] = useState<boolean>(false);
+  const [randomSettingsSaved, setRandomSettingsSaved] = useState<boolean>(false);
   // Audit Logs states
   const [auditLogsList, setAuditLogsList] = useState<any[]>([]);
   const [auditLogsLoading, setAuditLogsLoading] = useState<boolean>(false);
@@ -657,7 +659,7 @@ export const AdminPage: React.FC = () => {
       coins: Number(formData.get('coins')) || 0,
       bonusCoins: Number(formData.get('bonusCoins')) || 0,
       priceAmount: Number(formData.get('priceAmount')) || 0,
-      currency: (formData.get('currency') as string)?.trim() || 'SAR',
+      currency: (formData.get('currency') as string)?.trim() || 'EGP',
       icon: (formData.get('icon') as string)?.trim() || '🪙',
       badge: (formData.get('badge') as string)?.trim() || '',
       popular: formData.get('popular') === 'on' || formData.get('popular') === '1',
@@ -1165,14 +1167,14 @@ export const AdminPage: React.FC = () => {
 
             <div className="p-5 rounded-3xl bg-[#0e1017] border border-emerald-900/40">
               <div className="flex items-center justify-between text-xs text-neutral-400 font-tajawal mb-2">
-                <span>محاكاة الشحن التجريبي (Sandbox)</span>
+                <span>إجمالي كوينز الشحن اليدوي المعتمد</span>
                 <Zap className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="text-2xl font-black font-cairo text-emerald-300">
                 +{((economyStats?.totalRecharges?.total) || 0).toLocaleString('ar-EG')} كوينز
               </div>
               <p className="text-[11px] text-neutral-500 mt-1 font-tajawal">
-                {economyStats?.totalRecharges?.count || 0} عمليات شحن تجريبية مسجلة
+                {economyStats?.totalRecharges?.count || 0} عملية شحن مسجلة
               </p>
             </div>
           </div>
@@ -3297,11 +3299,11 @@ export const AdminPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">العملة</label>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1 font-tajawal">العملة (الافتراضية: EGP الجنيه المصري)</label>
                   <input
                     name="currency"
                     type="text"
-                    defaultValue={editingCoinPackage?.currency || 'SAR'}
+                    defaultValue={editingCoinPackage?.currency || 'EGP'}
                     className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white font-bold"
                     required
                   />

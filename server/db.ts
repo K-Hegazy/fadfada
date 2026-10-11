@@ -377,8 +377,8 @@ function initSchema(db: SqlDatabase) {
       package_id TEXT NOT NULL,
       amount_cents INTEGER NOT NULL,
       currency TEXT DEFAULT 'EGP',
-      provider TEXT NOT NULL, -- 'paymob', 'fawry', 'vodafone_cash'
-      status TEXT DEFAULT 'pending', -- 'pending', 'paid', 'failed', 'cancelled'
+      provider TEXT NOT NULL, -- 'manual_transfer', 'instapay', 'vodafone_cash'
+      status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
       provider_order_id TEXT,
       provider_tx_id TEXT,
       idempotency_key TEXT,
@@ -491,7 +491,7 @@ function initSchema(db: SqlDatabase) {
       coins INTEGER NOT NULL,
       bonus_coins INTEGER NOT NULL DEFAULT 0,
       price_amount REAL NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'SAR',
+      currency TEXT NOT NULL DEFAULT 'EGP',
       icon TEXT NOT NULL DEFAULT '🪙',
       badge TEXT DEFAULT '',
       color TEXT DEFAULT 'from-amber-600 to-amber-900',
@@ -597,6 +597,7 @@ function initSchema(db: SqlDatabase) {
   try { db.run("ALTER TABLE payment_orders ADD COLUMN reviewed_by TEXT DEFAULT ''"); } catch {}
   try { db.run("ALTER TABLE payment_orders ADD COLUMN reviewed_at DATETIME DEFAULT NULL"); } catch {}
   try { db.run("CREATE INDEX IF NOT EXISTS idx_pay_orders_status ON payment_orders(status, created_at)"); } catch {}
+  try { db.run("UPDATE coin_packages SET currency = 'EGP' WHERE currency = 'SAR' OR currency IS NULL"); } catch {}
 
   // Safe creation of platform_posts and post_likes tables
   db.run(`
@@ -1048,7 +1049,7 @@ function seedDefaultData(db: SqlDatabase) {
           100,
           0,
           5.0,
-          'SAR',
+          'EGP',
           '🪙',
           'انطلاقة سريعة',
           'from-neutral-800 to-neutral-900',
@@ -1062,7 +1063,7 @@ function seedDefaultData(db: SqlDatabase) {
           350,
           50,
           15.0,
-          'SAR',
+          'EGP',
           '⭐',
           'الأكثر طلباً 🔥',
           'from-amber-700 to-amber-950',
@@ -1076,7 +1077,7 @@ function seedDefaultData(db: SqlDatabase) {
           800,
           200,
           35.0,
-          'SAR',
+          'EGP',
           '💎',
           'وفر 25% ✨',
           'from-cyan-800 to-blue-950',
@@ -1090,7 +1091,7 @@ function seedDefaultData(db: SqlDatabase) {
           2000,
           600,
           80.0,
-          'SAR',
+          'EGP',
           '👑',
           'الأفضل قيمة 🏆',
           'from-purple-800 to-indigo-950',
@@ -1104,7 +1105,7 @@ function seedDefaultData(db: SqlDatabase) {
           5000,
           2000,
           180.0,
-          'SAR',
+          'EGP',
           '🏛️',
           'باقة الملوك 🌟',
           'from-amber-500 via-yellow-600 to-amber-900',
