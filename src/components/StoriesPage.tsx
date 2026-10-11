@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { apiRequest, uploadMedia } from '../services/api';
+import { apiRequest, uploadMedia, getMediaUrl } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Story } from '../types';
 import {
@@ -251,7 +251,7 @@ export const StoriesPage: React.FC = () => {
                   {/* Background image if image story */}
                   {story.media_url && (
                     <img
-                      src={story.media_url}
+                      src={getMediaUrl(story.media_url)}
                       alt=""
                       loading="lazy"
                       decoding="async"
@@ -442,7 +442,7 @@ export const StoriesPage: React.FC = () => {
               {/* Background Image */}
               {currentStory.media_url && (
                 <img
-                  src={currentStory.media_url}
+                  src={getMediaUrl(currentStory.media_url)}
                   alt=""
                   loading="lazy"
                   decoding="async"

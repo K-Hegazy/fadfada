@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { apiRequest, uploadMedia } from '../services/api';
+import { apiRequest, uploadMedia, getMediaUrl, loadSecureMediaBlob } from '../services/api';
 import { socketService } from '../services/socket';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -28,8 +28,89 @@ import {
   Volume2,
   Lock,
   X,
-  CircleDot
+  CircleDot,
+  Maximize2,
+  Loader2
 } from 'lucide-react';
+
+const NormalImageAttachment: React.FC<{ src: string; alt?: string; onClick?: () => void }> = ({ src, alt = 'مرفق', onClick }) => {
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<boolean>(false);
+  const [blobUrl, setBlobUrl] = useState<string>('');
+
+  useEffect(() => {
+    let active = true;
+    let currentBlob = '';
+
+    async function load() {
+      try {
+        setLoading(true);
+        setError(false);
+        const url = await loadSecureMediaBlob(src);
+        if (active) {
+          currentBlob = url;
+          setBlobUrl(url);
+          setLoading(false);
+        } else {
+          URL.revokeObjectURL(url);
+        }
+      } catch (e) {
+        if (active) {
+          setLoading(false);
+          setError(true);
+        }
+      }
+    }
+
+    load();
+
+    return () => {
+      active = false;
+      if (currentBlob) {
+        URL.revokeObjectURL(currentBlob);
+      }
+    };
+  }, [src]);
+
+  return (
+    <div
+      onClick={() => {
+        if (!error && onClick) onClick();
+      }}
+      className={`relative rounded-xl overflow-hidden bg-black/40 max-h-72 w-full max-w-sm flex items-center justify-center border border-white/10 group ${
+        !error && onClick ? 'cursor-pointer hover:border-emerald-500/50 transition-all' : ''
+      }`}
+    >
+      {loading && !error && (
+        <div className="h-44 w-full flex flex-col items-center justify-center gap-2 text-neutral-400 bg-neutral-900/60 animate-pulse">
+          <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
+          <span className="text-[11px] font-tajawal">جاري تحميل الصورة...</span>
+        </div>
+      )}
+
+      {error ? (
+        <div className="h-28 w-full p-3 flex flex-col items-center justify-center gap-1.5 bg-rose-950/40 text-rose-300 border border-rose-800/50 rounded-xl">
+          <AlertCircle className="w-5 h-5 text-rose-400" />
+          <span className="text-xs font-semibold font-tajawal">تعذر تحميل الصورة</span>
+        </div>
+      ) : blobUrl ? (
+        <img
+          src={blobUrl}
+          alt={alt}
+          loading="lazy"
+          className="rounded-xl max-h-72 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+        />
+      ) : null}
+
+      {!loading && !error && blobUrl && (
+        <div className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white text-xs font-bold font-cairo pointer-events-none">
+          <Maximize2 className="w-4 h-4" />
+          <span>انقر للمعاينة بحجم كامل</span>
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface MessagesPageProps {
   initialRecipientId?: string | null;
@@ -63,12 +144,53 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     mediaUrl: string;
     type: string;
   } | null>(null);
+  const [viewOnceBlobUrl, setViewOnceBlobUrl] = useState<string>('');
+  const [viewOnceImgLoading, setViewOnceImgLoading] = useState<boolean>(true);
+  const [viewOnceImgError, setViewOnceImgError] = useState<boolean>(false);
   const [openingViewOnce, setOpeningViewOnce] = useState<string | null>(null);
   const [activeSelfDestruct, setActiveSelfDestruct] = useState<{
     messageId: string;
     mediaUrl: string;
     duration: number;
   } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; title?: string } | null>(null);
+
+  // Securely load view-once media via headers without tokens in URL
+  useEffect(() => {
+    let active = true;
+    let currentBlob = '';
+
+    if (viewOnceModal?.mediaUrl) {
+      setViewOnceImgLoading(true);
+      setViewOnceImgError(false);
+
+      loadSecureMediaBlob(viewOnceModal.mediaUrl)
+        .then(url => {
+          if (active) {
+            currentBlob = url;
+            setViewOnceBlobUrl(url);
+            setViewOnceImgLoading(false);
+          } else {
+            URL.revokeObjectURL(url);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setViewOnceImgLoading(false);
+            setViewOnceImgError(true);
+          }
+        });
+    } else {
+      setViewOnceBlobUrl('');
+    }
+
+    return () => {
+      active = false;
+      if (currentBlob) {
+        URL.revokeObjectURL(currentBlob);
+      }
+    };
+  }, [viewOnceModal?.mediaUrl]);
 
   // Voice recording states
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -560,6 +682,8 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
       );
 
       if (res && res.mediaUrl) {
+        setViewOnceImgLoading(true);
+        setViewOnceImgError(false);
         setViewOnceModal({
           messageId: msgId,
           mediaUrl: res.mediaUrl,
@@ -577,6 +701,23 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
       alert(err.message || 'تعذر فتح الصورة، ربما تم فتحها مسبقاً');
     } finally {
       setOpeningViewOnce(null);
+    }
+  };
+
+  const handleCloseViewOnceModal = async () => {
+    if (viewOnceModal) {
+      const msgId = viewOnceModal.messageId;
+      try {
+        await apiRequest(`/messages/${msgId}/view-once-close`, { method: 'POST' });
+      } catch (e) {}
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === msgId
+            ? { ...m, isViewed: true, isDestroyed: true, mediaUrl: '', content: '⚠️ تم فتح الصورة لمرة واحدة ومسحها نهائياً' }
+            : m
+        )
+      );
+      setViewOnceModal(null);
     }
   };
 
@@ -995,17 +1136,22 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                           )}
                         </div>
                       ) : m.type === 'image' && m.mediaUrl ? (
-                        /* Normal Image */
-                        <img
-                          src={m.mediaUrl}
-                          alt="Attachment"
-                          className="rounded-xl max-h-64 object-cover w-full"
-                        />
+                        /* Normal Image Attachment */
+                        <div className="space-y-1">
+                          <NormalImageAttachment
+                            src={getMediaUrl(m.mediaUrl)}
+                            alt="مرفق"
+                            onClick={() => setLightboxImage({ url: getMediaUrl(m.mediaUrl), title: m.content || 'معاينة الصورة المرفقة' })}
+                          />
+                          {m.content && m.content !== 'صورة مرفقة' && (
+                            <p className="whitespace-pre-wrap leading-relaxed font-tajawal pt-1">{m.content}</p>
+                          )}
+                        </div>
                       ) : m.type === 'audio' && m.mediaUrl ? (
                         /* Audio Voice Note Player */
                         <div className="flex items-center gap-3 p-2 bg-black/30 rounded-xl min-w-[200px]">
                           <Volume2 className="w-5 h-5 text-emerald-300 shrink-0" />
-                          <audio controls src={m.mediaUrl} className="w-full h-8" />
+                          <audio controls src={getMediaUrl(m.mediaUrl)} className="w-full h-8" />
                         </div>
                       ) : (
                         /* Standard Text Content */
@@ -1224,7 +1370,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
       {/* WhatsApp-Style View Once Fullscreen Modal */}
       {viewOnceModal && (
-        <div className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between p-4 sm:p-6 backdrop-blur-md">
+        <div className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between p-4 sm:p-6 backdrop-blur-md select-none" dir="rtl">
           {/* Top Bar */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-white">
@@ -1240,7 +1386,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             </div>
 
             <button
-              onClick={() => setViewOnceModal(null)}
+              onClick={handleCloseViewOnceModal}
               className="p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 text-white cursor-pointer transition-colors"
             >
               <X className="w-6 h-6" />
@@ -1248,21 +1394,86 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           </div>
 
           {/* Image Display */}
-          <div className="flex-1 flex items-center justify-center p-4">
-            <img
-              src={viewOnceModal.mediaUrl}
-              alt="View once content"
-              className="max-h-[75vh] max-w-full rounded-2xl object-contain shadow-2xl border border-neutral-800"
-            />
+          <div className="flex-1 flex items-center justify-center p-4 min-h-0">
+            <div className="relative max-h-full max-w-full rounded-2xl overflow-hidden border border-neutral-800 shadow-2xl bg-neutral-950 flex items-center justify-center min-h-[260px] min-w-[260px]">
+              {viewOnceImgLoading && !viewOnceImgError && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-950/80 z-10 text-emerald-400">
+                  <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                  <span className="text-xs text-neutral-300 font-tajawal">جاري فتح صورة العرض لمرة واحدة بأمان...</span>
+                </div>
+              )}
+
+              {viewOnceImgError ? (
+                <div className="flex flex-col items-center justify-center p-8 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-rose-950/60 border border-rose-800 flex items-center justify-center text-rose-400">
+                    <AlertCircle className="w-6 h-6" />
+                  </div>
+                  <div className="text-sm font-bold text-rose-300 font-cairo">
+                    انتهت صلاحية الصورة أو تم فتحها مسبقاً
+                  </div>
+                  <p className="text-xs text-neutral-400 max-w-xs font-tajawal">
+                    تم مسح الصورة لضمان الخصوصية وفق نظام العرض لمرة واحدة.
+                  </p>
+                </div>
+              ) : viewOnceBlobUrl ? (
+                <img
+                  src={viewOnceBlobUrl}
+                  alt="View once content"
+                  className="max-h-[75vh] max-w-full rounded-2xl object-contain shadow-2xl border border-neutral-800 pointer-events-none select-none transition-opacity duration-300"
+                  onContextMenu={e => e.preventDefault()}
+                />
+              ) : null}
+            </div>
           </div>
 
           {/* Bottom dismiss button */}
           <div className="flex justify-center pb-2">
             <button
-              onClick={() => setViewOnceModal(null)}
-              className="px-6 py-2.5 rounded-2xl bg-neutral-900 border border-neutral-700 text-white font-bold text-xs hover:bg-neutral-800 cursor-pointer shadow-lg"
+              onClick={handleCloseViewOnceModal}
+              className="px-6 py-2.5 rounded-2xl bg-neutral-900 border border-neutral-700 text-white font-bold text-xs hover:bg-neutral-800 cursor-pointer shadow-lg active:scale-95 transition-all"
             >
               إغلاق وحذف الصورة نهائياً
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Normal Image Lightbox Modal */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col justify-between p-4 sm:p-6 animate-in fade-in select-none"
+          dir="rtl"
+          onClick={() => setLightboxImage(null)}
+        >
+          {/* Top Bar */}
+          <div className="flex items-center justify-between" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 text-white">
+              <span className="font-bold text-sm font-cairo">{lightboxImage.title || 'معاينة الصورة'}</span>
+            </div>
+            <button
+              onClick={() => setLightboxImage(null)}
+              className="p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 text-white cursor-pointer transition-colors"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          {/* Image Display */}
+          <div className="flex-1 flex items-center justify-center p-4 min-h-0" onClick={e => e.stopPropagation()}>
+            <img
+              src={lightboxImage.url}
+              alt={lightboxImage.title || 'معاينة'}
+              className="max-h-[80vh] max-w-full rounded-2xl object-contain shadow-2xl border border-neutral-800"
+            />
+          </div>
+
+          {/* Bottom dismiss button */}
+          <div className="flex justify-center pb-2" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => setLightboxImage(null)}
+              className="px-6 py-2.5 rounded-2xl bg-neutral-900 border border-neutral-700 text-white font-bold text-xs hover:bg-neutral-800 cursor-pointer shadow-lg active:scale-95 transition-all"
+            >
+              إغلاق المعاينة
             </button>
           </div>
         </div>

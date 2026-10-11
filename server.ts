@@ -80,6 +80,18 @@ function parseCookies(header?: string): Record<string, string> {
   return list;
 }
 
+// Helper to set authentication cookie on responses
+function setAuthCookie(res: Response, token: string) {
+  try {
+    res.cookie('auth_token', token, {
+      httpOnly: false,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    });
+  } catch (e) {}
+}
+
 // SECURE AUTHENTICATED MEDIA ACCESS (/uploads/:filename)
 // Strictly enforces authentication, authorization, ownership, view-once destruction, and block verification
 app.get('/uploads/:filename', async (req: Request, res: Response) => {
@@ -92,7 +104,7 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'الملف غير موجود' });
     }
 
-    const cookieToken = parseCookies(req.headers.cookie).auth_token;
+    const cookieToken = parseCookies(req.headers.cookie).auth_token || parseCookies(req.headers.cookie).fadfada_token;
     const authHeader = req.headers.authorization;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : ((req.query.token as string) || cookieToken);
 
@@ -104,6 +116,7 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
     const isPublicUserAsset = queryOne(db, "SELECT id FROM users WHERE avatar_url = ? OR cover_url = ?", [fileUrl, fileUrl]);
     const isRoomAsset = queryOne(db, "SELECT id FROM rooms WHERE image_url = ?", [fileUrl]);
     if (isPublicUserAsset || isRoomAsset) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
       return res.sendFile(filePath);
     }
 
@@ -124,6 +137,7 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
       if (isBlocked) {
         return res.status(403).json({ error: 'غير مصرح بالوصول إلى وسائط هذا المستخدم' });
       }
+      res.setHeader('Cache-Control', 'private, max-age=3600');
       return res.sendFile(filePath);
     }
 
@@ -137,20 +151,26 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
       if (member && member.is_banned === 1) {
         return res.status(403).json({ error: 'تم حظرك من هذه الغرفة' });
       }
+      res.setHeader('Cache-Control', 'private, max-age=3600');
       return res.sendFile(filePath);
     }
 
     // 4. Private Messages Media Authorization
     const pmsg = queryOne(
       db,
-      "SELECT id, sender_id, recipient_id, is_view_once, is_viewed, is_self_destruct, is_destroyed FROM private_messages WHERE media_url = ?",
+      `SELECT id, conversation_id, sender_id, recipient_id, is_view_once, is_viewed, viewed_at,
+              is_self_destruct, is_destroyed, self_destruct_duration, media_url, created_at
+       FROM private_messages WHERE media_url = ?`,
       [fileUrl]
     );
+
     if (pmsg) {
       if (!session) {
         return res.status(401).json({ error: 'يجب تسجيل الدخول لعرض وسائط المحادثة الخاصة' });
       }
-      if (pmsg.sender_id !== session.userId && pmsg.recipient_id !== session.userId) {
+      const isParticipant = pmsg.sender_id === session.userId || pmsg.recipient_id === session.userId;
+      const isStaff = ['owner', 'admin'].includes(session.role);
+      if (!isParticipant && !isStaff) {
         return res.status(403).json({ error: 'غير مصرح بالوصول إلى وسائط هذه المحادثة الخاصة' });
       }
 
@@ -161,20 +181,41 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
         "SELECT id FROM blocks WHERE (user_id = ? AND blocked_user_id = ?) OR (user_id = ? AND blocked_user_id = ?)",
         [otherUserId, session.userId, session.userId, otherUserId]
       );
-      if (isBlocked) {
+      if (isBlocked && !isStaff) {
         return res.status(403).json({ error: 'تم حظر الحساب' });
       }
 
-      // View-Once destruction check: once recipient views, media becomes completely inaccessible
-      if (pmsg.is_view_once === 1 && pmsg.recipient_id === session.userId && pmsg.is_viewed === 1) {
-        return res.status(410).json({ error: 'تم فتح هذه الوسائط لمرة واحدة مسبقاً وتدميرها (View Once)' });
+      // Self-destruct check:
+      if (pmsg.is_self_destruct === 1) {
+        if (pmsg.is_destroyed === 1) {
+          return res.status(410).json({ error: 'تم تدمير هذه الوسائط ذاتياً وانتهت صلاحيتها' });
+        }
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        return res.sendFile(filePath);
       }
 
-      // Self-destruct check
-      if (pmsg.is_self_destruct === 1 && pmsg.is_destroyed === 1) {
-        return res.status(410).json({ error: 'تم تدمير هذه الوسائط ذاتياً' });
+      // View-Once destruction check:
+      if (pmsg.is_view_once === 1) {
+        if (pmsg.is_destroyed === 1 || !pmsg.media_url) {
+          return res.status(410).json({ error: 'تم فتح هذه الوسائط لمرة واحدة مسبقاً وتدميرها' });
+        }
+        if (session.userId === pmsg.sender_id && !isStaff) {
+          return res.status(403).json({ error: 'هذه الصورة مرسلة للعرض لمرة واحدة لدى المستلم فقط' });
+        }
+        // Recipient access: must have opened via view-once endpoint or have an active viewing session
+        if (pmsg.is_viewed === 1) {
+          const viewedTime = pmsg.viewed_at ? new Date(pmsg.viewed_at).getTime() : 0;
+          // Grace period for viewing
+          if (viewedTime > 0 && Date.now() - viewedTime > 3 * 60 * 1000) {
+            return res.status(410).json({ error: 'انتهت صلاحية عرض هذه الصورة' });
+          }
+        }
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        return res.sendFile(filePath);
       }
 
+      // Standard private message attachment
+      res.setHeader('Cache-Control', 'private, max-age=86400');
       return res.sendFile(filePath);
     }
 
@@ -193,7 +234,19 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
       if (!isStaff && !isParty) {
         return res.status(403).json({ error: 'غير مصرح لك بالاطلاع على مرفقات هذا البلاغ' });
       }
+      res.setHeader('Cache-Control', 'private, max-age=3600');
       return res.sendFile(filePath);
+    }
+
+    // 6. Recently uploaded media by authenticated user
+    if (session) {
+      try {
+        const stats = fs.statSync(filePath);
+        if (Date.now() - stats.mtimeMs < 10 * 60 * 1000) {
+          res.setHeader('Cache-Control', 'private, max-age=600');
+          return res.sendFile(filePath);
+        }
+      } catch (e) {}
     }
 
     // Staff access for management, otherwise reject
@@ -959,6 +1012,7 @@ app.post('/api/auth/register', registerRateLimiter, async (req: Request, res: Re
 
     // Create session token
     const token = createSession(db, userId);
+    setAuthCookie(res, token);
 
     // Initial welcome notification
     const notifId = 'notif_' + Math.random().toString(36).substring(2, 9);
@@ -1039,6 +1093,7 @@ app.post('/api/auth/login', loginRateLimiter, async (req: Request, res: Response
     checkDailyStreak(db, user.id);
 
     const token = createSession(db, user.id);
+    setAuthCookie(res, token);
 
     return res.json({
       success: true,
@@ -1427,6 +1482,7 @@ app.post('/api/auth/guest', async (req: Request, res: Response) => {
     );
 
     const token = createSession(db, guestId);
+    setAuthCookie(res, token);
 
     // Record mandatory legal consent for guest session
     const termsId = 'trm_gst_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
@@ -1469,6 +1525,9 @@ app.post('/api/auth/guest', async (req: Request, res: Response) => {
 app.get('/api/auth/me', requireAuth, async (req: Request, res: Response) => {
   try {
     const session = (req as any).user as UserSession;
+    if (session && session.token) {
+      setAuthCookie(res, session.token);
+    }
     const db = await getDb();
     const user = queryOne(db, "SELECT * FROM users WHERE id = ?", [session.userId]);
     if (!user) {
@@ -1559,6 +1618,9 @@ app.post('/api/auth/logout', requireAuth, async (req: Request, res: Response) =>
   db.run("DELETE FROM sessions WHERE token = ?", [session.token]);
   saveDb();
   broadcastOnlineStatus(session.userId, false);
+  try {
+    res.clearCookie('auth_token', { path: '/' });
+  } catch (e) {}
   return res.json({ success: true });
 });
 
@@ -3210,14 +3272,27 @@ app.post('/api/messages/:id/view-once-close', requireAuth, async (req: Request, 
     const db = await getDb();
 
     const msg = queryOne(db, "SELECT * FROM private_messages WHERE id = ? AND recipient_id = ?", [msgId, session.userId]);
-    if (msg && msg.media_url && msg.media_url.startsWith('/uploads/')) {
-      const fn = path.basename(msg.media_url);
-      const fp = path.join(UPLOAD_DIR, fn);
-      if (fs.existsSync(fp)) {
-        try { fs.unlinkSync(fp); } catch {}
+    if (msg) {
+      if (msg.media_url && msg.media_url.startsWith('/uploads/')) {
+        const fn = path.basename(msg.media_url);
+        const fp = path.join(UPLOAD_DIR, fn);
+        if (fs.existsSync(fp)) {
+          try { fs.unlinkSync(fp); } catch {}
+        }
       }
-      db.run("UPDATE private_messages SET media_url = '', content = '⚠️ تم فتح الصورة لمرة واحدة ومسحها نهائياً' WHERE id = ?", [msgId]);
+      db.run(
+        "UPDATE private_messages SET is_destroyed = 1, is_viewed = 1, media_url = '', content = '⚠️ تم فتح الصورة لمرة واحدة ومسحها نهائياً' WHERE id = ?",
+        [msgId]
+      );
       saveDb();
+
+      const destroyedEvent = {
+        type: 'message:destroyed',
+        messageId: msgId,
+        conversationId: msg.conversation_id
+      };
+      sendToUser(msg.sender_id, destroyedEvent);
+      sendToUser(msg.recipient_id, destroyedEvent);
     }
     return res.json({ success: true });
   } catch (e) {

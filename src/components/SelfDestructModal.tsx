@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Clock, ShieldAlert, X } from 'lucide-react';
-import { apiRequest } from '../services/api';
+import { Clock, ShieldAlert, X, AlertTriangle, Loader2 } from 'lucide-react';
+import { apiRequest, loadSecureMediaBlob } from '../services/api';
 
 interface SelfDestructModalProps {
   messageId: string;
@@ -16,6 +16,9 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
   onClose
 }) => {
   const [secondsLeft, setSecondsLeft] = useState<number>(duration);
+  const [imageLoading, setImageLoading] = useState<boolean>(true);
+  const [imageError, setImageError] = useState<boolean>(false);
+  const [blobUrl, setBlobUrl] = useState<string>('');
   const destroyedRef = useRef<boolean>(false);
 
   const performDestruction = async () => {
@@ -30,6 +33,42 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
     }
   };
 
+  // Securely load media via authenticated headers without tokens in URL
+  useEffect(() => {
+    let active = true;
+    let currentBlob = '';
+
+    async function fetchMedia() {
+      try {
+        setImageLoading(true);
+        setImageError(false);
+        const url = await loadSecureMediaBlob(mediaUrl);
+        if (active) {
+          currentBlob = url;
+          setBlobUrl(url);
+          setImageLoading(false);
+        } else {
+          URL.revokeObjectURL(url);
+        }
+      } catch (err) {
+        if (active) {
+          setImageLoading(false);
+          setImageError(true);
+        }
+      }
+    }
+
+    fetchMedia();
+
+    return () => {
+      active = false;
+      if (currentBlob) {
+        URL.revokeObjectURL(currentBlob);
+      }
+    };
+  }, [mediaUrl]);
+
+  // Countdown timer
   useEffect(() => {
     const timer = setInterval(() => {
       setSecondsLeft(prev => {
@@ -44,9 +83,7 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
 
     return () => {
       clearInterval(timer);
-      if (!destroyedRef.current) {
-        performDestruction();
-      }
+      // NOTE: Do NOT perform destructive action in effect cleanup to preserve React StrictMode idempotence
     };
   }, [messageId]);
 
@@ -88,15 +125,38 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
         />
       </div>
 
-      {/* The Self-Destruct Image */}
+      {/* The Self-Destruct Image Content */}
       <div className="flex-1 w-full max-w-2xl flex items-center justify-center p-2 min-h-0">
-        <div className="relative max-h-full max-w-full rounded-2xl overflow-hidden border border-neutral-800 shadow-2xl bg-neutral-950 flex items-center justify-center">
-          <img
-            src={mediaUrl}
-            alt="صورة ذاتية التدمير"
-            className="max-h-[68vh] sm:max-h-[72vh] w-auto max-w-full object-contain pointer-events-none select-none"
-            onContextMenu={e => e.preventDefault()}
-          />
+        <div className="relative max-h-full max-w-full rounded-2xl overflow-hidden border border-neutral-800 shadow-2xl bg-neutral-950 flex items-center justify-center min-h-[260px] min-w-[260px]">
+          {/* Loading Spinner */}
+          {imageLoading && !imageError && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-950/80 z-10 text-amber-400">
+              <Loader2 className="w-8 h-8 animate-spin text-amber-400" />
+              <span className="text-xs text-neutral-300 font-tajawal">جاري تحميل الصورة المؤقتة بأمان...</span>
+            </div>
+          )}
+
+          {/* Error / Expired notice */}
+          {imageError ? (
+            <div className="flex flex-col items-center justify-center p-8 text-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-rose-950/60 border border-rose-800 flex items-center justify-center text-rose-400">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div className="text-sm font-bold text-rose-300 font-cairo">
+                انتهت صلاحية الصورة أو تم تدميرها
+              </div>
+              <p className="text-xs text-neutral-400 max-w-xs font-tajawal">
+                تم مسح وسائط هذه الرسالة نهائياً من خوادم فضفضه لضمان الخصوصية.
+              </p>
+            </div>
+          ) : blobUrl ? (
+            <img
+              src={blobUrl}
+              alt="صورة ذاتية التدمير"
+              className="max-h-[68vh] sm:max-h-[72vh] w-auto max-w-full object-contain pointer-events-none select-none transition-opacity duration-300"
+              onContextMenu={e => e.preventDefault()}
+            />
+          ) : null}
         </div>
       </div>
 

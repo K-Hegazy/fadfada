@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { apiRequest } from '../services/api';
+import { apiRequest, getMediaUrl } from '../services/api';
 import { socketService } from '../services/socket';
 import { supabase, RealtimeChannel } from '../services/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -845,9 +845,10 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
                   ) : msg.type === 'image' && msg.mediaUrl ? (
                     <div className="space-y-1">
                       <img
-                        src={msg.mediaUrl}
+                        src={getMediaUrl(msg.mediaUrl)}
                         alt="مرفق"
                         className="rounded-xl max-h-56 object-cover border border-black/20"
+                        loading="lazy"
                       />
                       {msg.content && msg.content !== '📷 صورة مرفقة' && (
                         <p className="text-xs font-tajawal pt-1">{msg.content}</p>
@@ -855,7 +856,7 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
                     </div>
                   ) : msg.type === 'audio' && msg.mediaUrl ? (
                     <div className="py-1">
-                      <audio controls className="max-w-[220px] h-8" src={msg.mediaUrl} />
+                      <audio controls className="max-w-[220px] h-8" src={getMediaUrl(msg.mediaUrl)} />
                     </div>
                   ) : (
                     <p className="text-sm font-tajawal whitespace-pre-wrap leading-relaxed">
