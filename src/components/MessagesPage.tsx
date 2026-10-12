@@ -30,7 +30,11 @@ import {
   X,
   CircleDot,
   Maximize2,
-  Loader2
+  Loader2,
+  Reply,
+  Edit2,
+  CornerDownRight,
+  Copy
 } from 'lucide-react';
 
 const NormalImageAttachment: React.FC<{ src: string; alt?: string; onClick?: () => void }> = ({ src, alt = 'مرفق', onClick }) => {
@@ -98,12 +102,15 @@ const NormalImageAttachment: React.FC<{ src: string; alt?: string; onClick?: () 
           src={blobUrl}
           alt={alt}
           loading="lazy"
-          className="rounded-xl max-h-72 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+          draggable={false}
+          onContextMenu={e => e.preventDefault()}
+          onDragStart={e => e.preventDefault()}
+          className="rounded-xl max-h-72 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02] select-none"
         />
       ) : null}
 
       {!loading && !error && blobUrl && (
-        <div className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white text-xs font-bold font-cairo pointer-events-none">
+        <div className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white text-xs font-bold font-cairo pointer-events-none select-none">
           <Maximize2 className="w-4 h-4" />
           <span>انقر للمعاينة بحجم كامل</span>
         </div>
@@ -133,64 +140,24 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   const [inputText, setInputText] = useState<string>('');
   const [selfDestructEnabled, setSelfDestructEnabled] = useState<boolean>(false);
   const [selfDestructDuration, setSelfDestructDuration] = useState<number>(10);
-  const [viewOnceEnabled, setViewOnceEnabled] = useState<boolean>(false);
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [partnerTyping, setPartnerTyping] = useState<boolean>(false);
   const [giftModalOpen, setGiftModalOpen] = useState<boolean>(false);
 
-  // View Once active modal
-  const [viewOnceModal, setViewOnceModal] = useState<{
-    messageId: string;
-    mediaUrl: string;
-    type: string;
-  } | null>(null);
-  const [viewOnceBlobUrl, setViewOnceBlobUrl] = useState<string>('');
-  const [viewOnceImgLoading, setViewOnceImgLoading] = useState<boolean>(true);
-  const [viewOnceImgError, setViewOnceImgError] = useState<boolean>(false);
-  const [openingViewOnce, setOpeningViewOnce] = useState<string | null>(null);
+  // Message Interaction States: Reply, Edit, Delete, Reactions
+  const [replyingTo, setReplyingTo] = useState<PrivateMessage | null>(null);
+  const [editingMessage, setEditingMessage] = useState<PrivateMessage | null>(null);
+  const [deleteModalMsg, setDeleteModalMsg] = useState<PrivateMessage | null>(null);
+  const [activeReactionPickerMsgId, setActiveReactionPickerMsgId] = useState<string | null>(null);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+
+  // Self Destruct & Lightbox states
   const [activeSelfDestruct, setActiveSelfDestruct] = useState<{
     messageId: string;
     mediaUrl: string;
     duration: number;
   } | null>(null);
   const [lightboxImage, setLightboxImage] = useState<{ url: string; title?: string } | null>(null);
-
-  // Securely load view-once media via headers without tokens in URL
-  useEffect(() => {
-    let active = true;
-    let currentBlob = '';
-
-    if (viewOnceModal?.mediaUrl) {
-      setViewOnceImgLoading(true);
-      setViewOnceImgError(false);
-
-      loadSecureMediaBlob(viewOnceModal.mediaUrl)
-        .then(url => {
-          if (active) {
-            currentBlob = url;
-            setViewOnceBlobUrl(url);
-            setViewOnceImgLoading(false);
-          } else {
-            URL.revokeObjectURL(url);
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setViewOnceImgLoading(false);
-            setViewOnceImgError(true);
-          }
-        });
-    } else {
-      setViewOnceBlobUrl('');
-    }
-
-    return () => {
-      active = false;
-      if (currentBlob) {
-        URL.revokeObjectURL(currentBlob);
-      }
-    };
-  }, [viewOnceModal?.mediaUrl]);
 
   // Voice recording states
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -368,15 +335,45 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
       );
     });
 
-    // Listen for View-Once opened events (notifies sender)
-    const unsubViewOnce = socketService.on('message:view_once_opened', (data: any) => {
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === data.messageId
-            ? { ...m, isViewed: true, viewedAt: data.viewedAt, mediaUrl: '' }
-            : m
-        )
-      );
+    // Listen for real-time reactions
+    const unsubReaction = socketService.on('message:reaction', (data: any) => {
+      if (data.messageId) {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === data.messageId ? { ...m, reactions: data.reactions } : m
+          )
+        );
+      }
+    });
+
+    // Listen for real-time message edits
+    const unsubEdit = socketService.on('message:edited', (data: any) => {
+      if (data.messageId) {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === data.messageId
+              ? { ...m, content: data.content, isEdited: true, editedAt: data.editedAt }
+              : m
+          )
+        );
+      }
+    });
+
+    // Listen for real-time message deletions
+    const unsubDelete = socketService.on('message:deleted', (data: any) => {
+      if (data.messageId) {
+        if (data.mode === 'me') {
+          setMessages(prev => prev.filter(m => m.id !== data.messageId));
+        } else {
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === data.messageId
+                ? { ...m, isDeleted: true, content: '🚫 تم حذف هذه الرسالة', mediaUrl: '' }
+                : m
+            )
+          );
+        }
+      }
     });
 
     // Listen for typing events
@@ -396,7 +393,9 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     return () => {
       unsubMsg();
       unsubDestroy();
-      unsubViewOnce();
+      unsubReaction();
+      unsubEdit();
+      unsubDelete();
       unsubTypingStart();
       unsubTypingStop();
       channel.unsubscribe();
@@ -494,6 +493,12 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     if (e) e.preventDefault();
     if (!inputText.trim() || !activeConvId) return;
 
+    // If we are currently editing a message, save the edit instead of sending a new message
+    if (editingMessage) {
+      handleSaveEdit();
+      return;
+    }
+
     const text = inputText.trim();
     const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     const convId = activeConvId;
@@ -502,23 +507,35 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     // Clear input immediately so user never experiences UI hangs or input freezing!
     setInputText('');
 
-    // Instant optimistic render with explicit 'sending' status
+    const currentReplyingTo = replyingTo;
     const optimisticMessage: PrivateMessage = {
       id: tempId,
       conversationId: convId,
       senderId: user?.id || '',
-      recipientId,
+      recipientId: activeRecipient?.id || '',
       content: text,
       type: 'text',
       isRead: false,
       isSelfDestruct: false,
       isViewOnce: false,
       isViewed: false,
+      replyToId: currentReplyingTo?.id || null,
+      replyTo: currentReplyingTo ? {
+        id: currentReplyingTo.id,
+        senderId: currentReplyingTo.senderId,
+        senderUsername: currentReplyingTo.senderId === user?.id ? 'أنت' : (activeRecipient?.username || 'مستخدم'),
+        content: currentReplyingTo.content,
+        type: currentReplyingTo.type
+      } : null,
+      isEdited: false,
+      isDeleted: false,
+      reactions: [],
       status: 'sending',
       createdAt: new Date().toISOString()
     };
 
     setMessages(prev => [...prev, optimisticMessage]);
+    setReplyingTo(null);
     scrollToBottom();
 
     // Instantly update conversations list preview in sidebar without waiting for network
@@ -550,7 +567,8 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             method: 'POST',
             body: JSON.stringify({
               content: text,
-              type: 'text'
+              type: 'text',
+              replyToId: currentReplyingTo?.id || null
             })
           }
         );
@@ -566,6 +584,130 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
         );
       }
     })();
+  };
+
+  // Edit Message Handlers
+  const handleStartEdit = (msg: PrivateMessage) => {
+    if (msg.senderId !== user?.id || msg.type !== 'text' || msg.isDeleted) return;
+    setEditingMessage(msg);
+    setInputText(msg.content);
+    setReplyingTo(null);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessage(null);
+    setInputText('');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingMessage || !inputText.trim()) return;
+    const msgId = editingMessage.id;
+    const newContent = inputText.trim();
+
+    // Optimistic update
+    setMessages(prev =>
+      prev.map(m => (m.id === msgId ? { ...m, content: newContent, isEdited: true } : m))
+    );
+    setEditingMessage(null);
+    setInputText('');
+
+    try {
+      await apiRequest(`/messages/${msgId}/edit`, {
+        method: 'POST',
+        body: JSON.stringify({ content: newContent })
+      });
+    } catch (err: any) {
+      console.error('Failed to edit message:', err);
+    }
+  };
+
+  // Delete Message Handler
+  const handleDeleteMessage = async (msgId: string, mode: 'everyone' | 'me') => {
+    setDeleteModalMsg(null);
+    if (mode === 'me') {
+      setMessages(prev => prev.filter(m => m.id !== msgId));
+    } else {
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === msgId
+            ? { ...m, isDeleted: true, content: '🚫 تم حذف هذه الرسالة', mediaUrl: '' }
+            : m
+        )
+      );
+    }
+
+    try {
+      await apiRequest(`/messages/${msgId}/delete`, {
+        method: 'POST',
+        body: JSON.stringify({ mode })
+      });
+    } catch (err: any) {
+      console.error('Failed to delete message:', err);
+    }
+  };
+
+  // Reaction Toggle Handler
+  const handleToggleReaction = async (msgId: string, emoji: string) => {
+    setActiveReactionPickerMsgId(null);
+
+    // Optimistic toggle
+    setMessages(prev =>
+      prev.map(m => {
+        if (m.id !== msgId) return m;
+        const currentRx = m.reactions || [];
+        const myActive = currentRx.find(r => r.hasReacted);
+        let nextRx: any[];
+
+        if (myActive && myActive.emoji === emoji) {
+          // Toggle off
+          nextRx = currentRx
+            .map(r => r.emoji === emoji ? { ...r, count: r.count - 1, hasReacted: false } : r)
+            .filter(r => r.count > 0);
+        } else {
+          // Decrement previous if user had one
+          let cleaned = currentRx
+            .map(r => r.hasReacted ? { ...r, count: r.count - 1, hasReacted: false } : r)
+            .filter(r => r.count > 0);
+          const found = cleaned.findIndex(r => r.emoji === emoji);
+          if (found !== -1) {
+            cleaned[found] = { ...cleaned[found], count: cleaned[found].count + 1, hasReacted: true };
+          } else {
+            cleaned.push({ emoji, count: 1, hasReacted: true });
+          }
+          nextRx = cleaned;
+        }
+        return { ...m, reactions: nextRx };
+      })
+    );
+
+    try {
+      const res = await apiRequest<{ success: boolean; reactions: any[] }>(
+        `/messages/${msgId}/reactions`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ emoji })
+        }
+      );
+      if (res.reactions) {
+        setMessages(prev =>
+          prev.map(m => (m.id === msgId ? { ...m, reactions: res.reactions } : m))
+        );
+      }
+    } catch (err: any) {
+      console.error('Failed to react to message:', err);
+    }
+  };
+
+  // Scroll to original replied-to message with highlight pulse
+  const handleScrollToMessage = (targetId: string) => {
+    const el = document.getElementById(`msg-${targetId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMsgId(targetId);
+      setTimeout(() => {
+        setHighlightedMsgId(null);
+      }, 2000);
+    }
   };
 
   // Retry sending a failed message
@@ -585,7 +727,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             mediaUrl: failedMsg.mediaUrl,
             isSelfDestruct: failedMsg.isSelfDestruct,
             selfDestructDuration: failedMsg.selfDestructDuration,
-            isViewOnce: failedMsg.isViewOnce
+            replyToId: failedMsg.replyToId
           })
         }
       );
@@ -600,13 +742,12 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     }
   };
 
-  // Image Upload with View-Once and Self-Destruct options
+  // Image Upload with Self-Destruct options (View-once completely removed)
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeConvId) return;
 
     const tempId = 'temp_img_' + Date.now();
-    const isViewOnce = viewOnceEnabled;
     const isSelfDestruct = selfDestructEnabled;
     const convId = activeConvId;
     const recipientId = activeRecipient?.id || '';
@@ -624,21 +765,21 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
         conversationId: convId,
         senderId: user?.id || '',
         recipientId,
-        content: isViewOnce ? 'صورة تُعرض لمرة واحدة' : isSelfDestruct ? 'صورة مؤقتة ذاتية التدمير' : 'صورة مرفقة',
+        content: isSelfDestruct ? 'صورة مؤقتة ذاتية التدمير' : 'صورة مرفقة',
         type: 'image',
-        mediaUrl: isViewOnce ? '' : dataUrl,
+        mediaUrl: dataUrl,
         isRead: false,
         isSelfDestruct,
         selfDestructDuration: isSelfDestruct ? selfDestructDuration : 0,
-        isViewOnce,
+        isViewOnce: false,
         isViewed: false,
+        reactions: [],
         status: 'sending',
         createdAt: new Date().toISOString()
       };
 
       setMessages(prev => [...prev, optimisticMsg]);
       scrollToBottom();
-      setViewOnceEnabled(false);
       setSelfDestructEnabled(false);
 
       try {
@@ -649,12 +790,11 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           {
             method: 'POST',
             body: JSON.stringify({
-              content: isViewOnce ? 'صورة تُعرض لمرة واحدة' : isSelfDestruct ? 'صورة مؤقتة ذاتية التدمير' : 'صورة مرفقة',
+              content: isSelfDestruct ? 'صورة مؤقتة ذاتية التدمير' : 'صورة مرفقة',
               type: 'image',
               mediaUrl: uploadedUrl,
               isSelfDestruct,
-              selfDestructDuration: isSelfDestruct ? selfDestructDuration : 0,
-              isViewOnce
+              selfDestructDuration: isSelfDestruct ? selfDestructDuration : 0
             })
           }
         );
@@ -670,55 +810,6 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
       }
     };
     reader.readAsDataURL(file);
-  };
-
-  // Open View-Once Media Modal (Recipient side)
-  const handleOpenViewOnce = async (msgId: string) => {
-    try {
-      setOpeningViewOnce(msgId);
-      const res = await apiRequest<{ success: boolean; mediaUrl: string; type: string }>(
-        `/messages/${msgId}/view-once`,
-        { method: 'POST' }
-      );
-
-      if (res && res.mediaUrl) {
-        setViewOnceImgLoading(true);
-        setViewOnceImgError(false);
-        setViewOnceModal({
-          messageId: msgId,
-          mediaUrl: res.mediaUrl,
-          type: res.type || 'image'
-        });
-
-        // Mark as viewed in local state
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === msgId ? { ...m, isViewed: true, mediaUrl: '' } : m
-          )
-        );
-      }
-    } catch (err: any) {
-      alert(err.message || 'تعذر فتح الصورة، ربما تم فتحها مسبقاً');
-    } finally {
-      setOpeningViewOnce(null);
-    }
-  };
-
-  const handleCloseViewOnceModal = async () => {
-    if (viewOnceModal) {
-      const msgId = viewOnceModal.messageId;
-      try {
-        await apiRequest(`/messages/${msgId}/view-once-close`, { method: 'POST' });
-      } catch (e) {}
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === msgId
-            ? { ...m, isViewed: true, isDestroyed: true, mediaUrl: '', content: '⚠️ تم فتح الصورة لمرة واحدة ومسحها نهائياً' }
-            : m
-        )
-      );
-      setViewOnceModal(null);
-    }
   };
 
   // Trigger Self-Destruct view
@@ -1040,73 +1131,161 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                 </div>
                 <h3 className="font-cairo font-bold text-white text-lg">بداية محادثة جديدة</h3>
                 <p className="text-xs text-neutral-400 max-w-sm font-tajawal">
-                  محادثة آمنة ومشفرة تماماً. تدعم ميزة "عرض لمرة واحدة ➀" لحماية الخصوصية كالواتساب، والرسائل الصوتية والهدايا.
+                  محادثة آمنة ومشفرة تماماً. تدعم الصور المؤقتة ذاتية التدمير، والرسائل الصوتية، والتفاعلات، والردود المقتبسة، وتعديل الرسائل.
                 </p>
               </div>
             ) : (
               messages.map((m) => {
                 const isMine = m.senderId === user?.id;
+                const quickEmojis = ['❤️', '😂', '👍', '😮', '😢', '🔥', '👏'];
 
                 return (
                   <div
                     key={m.id}
-                    className={`flex flex-col ${isMine ? 'items-start' : 'items-end'} max-w-[85%] sm:max-w-[70%] ${isMine ? 'mr-auto' : 'ml-auto'}`}
+                    id={`msg-${m.id}`}
+                    className={`group relative flex flex-col ${isMine ? 'items-start mr-auto' : 'items-end ml-auto'} max-w-[85%] sm:max-w-[70%] transition-all duration-300 ${
+                      highlightedMsgId === m.id ? 'ring-2 ring-emerald-400 bg-emerald-500/10 p-1 rounded-2xl' : ''
+                    }`}
                   >
+                    {/* Floating Action Bar on hover/focus */}
+                    {!m.isDeleted && (
+                      <div
+                        className={`absolute -top-3.5 ${
+                          isMine ? 'left-2' : 'right-2'
+                        } hidden group-hover:flex items-center gap-1 bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 rounded-xl px-1.5 py-0.5 shadow-xl z-20 transition-all`}
+                      >
+                        {/* Reaction Trigger Button */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveReactionPickerMsgId(activeReactionPickerMsgId === m.id ? null : m.id)}
+                          className="p-1 hover:bg-neutral-800 text-neutral-400 hover:text-amber-400 rounded-lg cursor-pointer transition-colors"
+                          title="تفاعل بإيموجي"
+                        >
+                          <Smile className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Reply Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplyingTo(m);
+                            setEditingMessage(null);
+                          }}
+                          className="p-1 hover:bg-neutral-800 text-neutral-400 hover:text-sky-400 rounded-lg cursor-pointer transition-colors"
+                          title="رد على الرسالة"
+                        >
+                          <Reply className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Edit Button (Text messages by sender only) */}
+                        {isMine && m.type === 'text' && !m.isSelfDestruct && (
+                          <button
+                            type="button"
+                            onClick={() => handleStartEdit(m)}
+                            className="p-1 hover:bg-neutral-800 text-neutral-400 hover:text-emerald-400 rounded-lg cursor-pointer transition-colors"
+                            title="تعديل الرسالة"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {/* Copy Text Button */}
+                        {m.type === 'text' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              try { navigator.clipboard.writeText(m.content); } catch (e) {}
+                            }}
+                            className="p-1 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded-lg cursor-pointer transition-colors"
+                            title="نسخ النص"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {/* Delete Button */}
+                        <button
+                          type="button"
+                          onClick={() => setDeleteModalMsg(m)}
+                          className="p-1 hover:bg-rose-950/80 text-neutral-400 hover:text-rose-400 rounded-lg cursor-pointer transition-colors"
+                          title="حذف الرسالة"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Quick Reactions Picker Popup */}
+                    {activeReactionPickerMsgId === m.id && (
+                      <div
+                        className={`absolute -top-11 ${
+                          isMine ? 'left-2' : 'right-2'
+                        } flex items-center gap-1 p-1 bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl z-30 animate-in fade-in zoom-in-95`}
+                      >
+                        {quickEmojis.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => handleToggleReaction(m.id, emoji)}
+                            className="w-7 h-7 flex items-center justify-center text-base hover:scale-125 transition-transform cursor-pointer rounded-lg hover:bg-neutral-800"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setActiveReactionPickerMsgId(null)}
+                          className="p-1 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 cursor-pointer ml-1"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Message Bubble Box */}
                     <div
-                      className={`p-3.5 rounded-2xl text-sm relative space-y-1.5 shadow-md ${
-                        isMine
+                      className={`p-3.5 rounded-2xl text-sm relative space-y-1.5 shadow-md w-full ${
+                        m.isDeleted
+                          ? 'bg-neutral-900/60 border border-neutral-800 text-neutral-500 italic'
+                          : isMine
                           ? 'bg-emerald-700 text-white rounded-br-none'
                           : 'bg-neutral-900 border border-neutral-800 text-neutral-200 rounded-bl-none'
                       }`}
                     >
-                      {/* WhatsApp-Style View Once Media (عرض لمرة واحدة) */}
-                      {m.isViewOnce ? (
-                        <div className="p-3 rounded-2xl bg-black/40 border border-emerald-500/40 space-y-2 min-w-[240px]">
-                          <div className="flex items-center gap-2 text-xs font-bold text-emerald-300">
-                            <span className="w-6 h-6 rounded-full border-2 border-emerald-400 flex items-center justify-center font-black text-xs">
-                              1
+                      {/* Quoted Replying Preview inside bubble */}
+                      {m.replyTo && (
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleScrollToMessage(m.replyTo!.id);
+                          }}
+                          className={`mb-1 p-2 rounded-xl text-right cursor-pointer transition-colors max-w-full overflow-hidden select-none border-r-3 ${
+                            isMine
+                              ? 'bg-black/35 hover:bg-black/50 border-r-emerald-300 text-emerald-100'
+                              : 'bg-black/40 hover:bg-black/60 border-r-emerald-500 text-neutral-300'
+                          }`}
+                          title="انقر للانتقال إلى الرسالة الأصلية"
+                        >
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold font-cairo text-emerald-300">
+                            <CornerDownRight className="w-3 h-3 shrink-0" />
+                            <span className="truncate">
+                              {m.replyTo.senderUsername || (m.replyTo.senderId === user?.id ? 'أنت' : 'مستخدم')}
                             </span>
-                            <span>صورة تُعرض لمرة واحدة</span>
                           </div>
+                          <div className="text-[11px] opacity-90 font-tajawal truncate max-w-xs mt-0.5">
+                            {m.replyTo.content || (m.replyTo.type === 'image' ? '📷 صورة' : m.replyTo.type === 'audio' ? '🎤 تسجيل صوتي' : 'رسالة')}
+                          </div>
+                        </div>
+                      )}
 
-                          {isMine ? (
-                            /* Sender View */
-                            <div className="text-xs py-1.5 px-3 rounded-xl bg-neutral-950/60 border border-neutral-800/80 flex items-center justify-between">
-                              {m.isViewed ? (
-                                <span className="text-cyan-300 font-bold flex items-center gap-1.5">
-                                  <CheckCheck className="w-4 h-4 text-cyan-400" />
-                                  <span>تم فتحها بواسطة المستلم</span>
-                                </span>
-                              ) : (
-                                <span className="text-neutral-400 flex items-center gap-1.5">
-                                  <Clock className="w-3.5 h-3.5 text-amber-400" />
-                                  <span>بانتظار المشاهدة لمرة واحدة</span>
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            /* Recipient View */
-                            <div>
-                              {m.isViewed ? (
-                                <div className="text-xs py-2 px-3 rounded-xl bg-neutral-950/80 border border-neutral-800 text-neutral-400 flex items-center gap-2">
-                                  <Lock className="w-4 h-4 text-neutral-500" />
-                                  <span>تم فتح هذه الصورة مسبقاً (انتهت الصلاحية)</span>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => handleOpenViewOnce(m.id)}
-                                  disabled={openingViewOnce === m.id}
-                                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
-                                >
-                                  <Eye className="w-4 h-4" />
-                                  <span>{openingViewOnce === m.id ? 'جاري فتح الصورة...' : 'اضغط للمشاهدة لمرة واحدة'}</span>
-                                </button>
-                              )}
-                            </div>
-                          )}
+                      {/* Deleted Message Notice */}
+                      {m.isDeleted ? (
+                        <div className="flex items-center gap-1.5 py-1 text-xs text-neutral-400">
+                          <Trash2 className="w-3.5 h-3.5 opacity-60" />
+                          <span className="font-tajawal">🚫 تم حذف هذه الرسالة</span>
                         </div>
                       ) : m.isSelfDestruct ? (
-                        /* Self-Destructing Image Message - No thumbnail ever exposed */
+                        /* Self-Destructing Image Message */
                         <div className="p-3 rounded-2xl bg-black/50 border border-amber-500/40 space-y-2 max-w-sm">
                           <div className="flex items-center justify-between text-xs text-amber-300 font-bold font-cairo">
                             <span className="flex items-center gap-1.5">
@@ -1131,7 +1310,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                               className="w-full px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-amber-600/30 active:scale-95 transition-all"
                             >
                               <Eye className="w-4 h-4" />
-                              <span>انقر للمشاهدة لمرة واحدة قبل تدميرها</span>
+                              <span>انقر للمشاهدة قبل تدميرها</span>
                             </button>
                           )}
                         </div>
@@ -1141,7 +1320,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                           <NormalImageAttachment
                             src={getMediaUrl(m.mediaUrl)}
                             alt="مرفق"
-                            onClick={() => setLightboxImage({ url: getMediaUrl(m.mediaUrl), title: m.content || 'معاينة الصورة المرفقة' })}
+                            onClick={() => setLightboxImage({ url: getMediaUrl(m.mediaUrl!), title: m.content || 'معاينة الصورة المرفقة' })}
                           />
                           {m.content && m.content !== 'صورة مرفقة' && (
                             <p className="whitespace-pre-wrap leading-relaxed font-tajawal pt-1">{m.content}</p>
@@ -1158,9 +1337,16 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                         <p className="whitespace-pre-wrap leading-relaxed font-tajawal">{m.content}</p>
                       )}
 
-                      {/* Timestamp & Status ticks with immediate Sending indicator and Retry for failed */}
+                      {/* Timestamp, Edited badge & Status indicators */}
                       <div className={`flex items-center gap-1.5 text-[10px] ${isMine ? 'text-emerald-200' : 'text-neutral-500'}`}>
                         <span>{new Date(m.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
+
+                        {m.isEdited && !m.isDeleted && (
+                          <span className="text-[9px] font-tajawal px-1 py-0.2 rounded bg-black/30 text-emerald-200 border border-emerald-400/30">
+                            (معدّلة)
+                          </span>
+                        )}
+
                         {isMine && (
                           m.status === 'sending' ? (
                             <div className="flex items-center gap-1 text-[10px] text-amber-300 font-tajawal animate-pulse" title="جاري الإرسال...">
@@ -1184,6 +1370,28 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                         )}
                       </div>
                     </div>
+
+                    {/* Emoji Reactions List Display below message bubble */}
+                    {m.reactions && m.reactions.length > 0 && !m.isDeleted && (
+                      <div className={`flex flex-wrap items-center gap-1 mt-1 ${isMine ? 'justify-start' : 'justify-end'}`}>
+                        {m.reactions.map((rx) => (
+                          <button
+                            key={rx.emoji}
+                            type="button"
+                            onClick={() => handleToggleReaction(m.id, rx.emoji)}
+                            className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 border transition-all cursor-pointer active:scale-95 ${
+                              rx.hasReacted
+                                ? 'bg-emerald-600/30 border-emerald-500 text-white font-bold ring-1 ring-emerald-500/50 shadow-sm'
+                                : 'bg-neutral-900/90 border-neutral-700/80 text-neutral-300 hover:border-neutral-500 hover:text-white'
+                            }`}
+                            title={rx.hasReacted ? 'إزالة تفاعلك' : 'إضافة تفاعل'}
+                          >
+                            <span>{rx.emoji}</span>
+                            <span className="text-[10px] font-mono">{rx.count}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -1199,20 +1407,44 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             </div>
           )}
 
-          {/* View Once Alert Banner */}
-          {viewOnceEnabled && (
-            <div className="px-6 py-2 bg-emerald-950/50 border-t border-emerald-800/50 flex items-center justify-between text-xs text-emerald-300 font-tajawal">
-              <span className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full border-2 border-emerald-400 flex items-center justify-center font-black text-[11px]">
-                  1
-                </span>
-                <span>وضع العرض لمرة واحدة مُفعّل (مثل واتساب): ستختفي الصورة فور خروج المستلم منها ولن يتمكن من حفظها.</span>
-              </span>
+          {/* Edit Message Mode Preview Bar */}
+          {editingMessage && (
+            <div className="px-4 sm:px-6 py-2 bg-emerald-950/60 border-t border-emerald-700/60 flex items-center justify-between text-xs text-emerald-200 font-tajawal animate-in fade-in">
+              <div className="flex items-center gap-2 truncate">
+                <Edit2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-bold text-white font-cairo">تعديل الرسالة:</span>
+                <span className="text-neutral-300 truncate max-w-xs">{editingMessage.content}</span>
+              </div>
               <button
-                onClick={() => setViewOnceEnabled(false)}
-                className="text-neutral-400 hover:text-white cursor-pointer"
+                type="button"
+                onClick={handleCancelEdit}
+                className="p-1 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
+                title="إلغاء التعديل"
               >
-                إلغاء
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Reply Message Mode Preview Bar */}
+          {replyingTo && (
+            <div className="px-4 sm:px-6 py-2 bg-sky-950/60 border-t border-sky-700/60 flex items-center justify-between text-xs text-sky-200 font-tajawal animate-in fade-in">
+              <div className="flex items-center gap-2 truncate">
+                <Reply className="w-4 h-4 text-sky-400 shrink-0" />
+                <span className="font-bold text-white font-cairo">
+                  الرد على {replyingTo.senderId === user?.id ? 'رسالتك' : (activeRecipient?.username || 'المستخدم')}:
+                </span>
+                <span className="text-neutral-300 truncate max-w-xs">
+                  {replyingTo.content || (replyingTo.type === 'image' ? '📷 صورة' : replyingTo.type === 'audio' ? '🎤 تسجيل صوتي' : 'رسالة')}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReplyingTo(null)}
+                className="p-1 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
+                title="إلغاء الرد"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
           )}
@@ -1289,32 +1521,10 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                   <Image className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
 
-                {/* View Once Toggle Button (WhatsApp Style Circle-1) */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewOnceEnabled(!viewOnceEnabled);
-                    if (!viewOnceEnabled) setSelfDestructEnabled(false);
-                  }}
-                  className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl border transition-all cursor-pointer flex items-center justify-center font-bold text-xs sm:text-sm shrink-0 active:scale-95 ${
-                    viewOnceEnabled
-                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-600/30'
-                      : 'bg-neutral-900 text-neutral-400 hover:text-emerald-400 border-neutral-800'
-                  }`}
-                  title="عرض لمرة واحدة (مثل واتساب ➀)"
-                >
-                  <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 border-current flex items-center justify-center font-black text-[10px] sm:text-[11px] leading-none">
-                    1
-                  </div>
-                </button>
-
                 {/* Self Destruct Toggle */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelfDestructEnabled(!selfDestructEnabled);
-                    if (!selfDestructEnabled) setViewOnceEnabled(false);
-                  }}
+                  onClick={() => setSelfDestructEnabled(!selfDestructEnabled)}
                   className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shrink-0 active:scale-95 ${
                     selfDestructEnabled
                       ? 'bg-amber-950 text-amber-300 border-amber-700'
@@ -1340,17 +1550,26 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                   type="text"
                   value={inputText}
                   onChange={handleInputChange}
-                  placeholder="فضفض بكلماتك الراقية..."
+                  placeholder={editingMessage ? 'قم بتعديل نص الرسالة ثم اضغط حفظ...' : 'فضفض بكلماتك الراقية...'}
                   className="flex-1 min-w-0 px-2.5 sm:px-4 py-2 sm:py-3 rounded-xl sm:rounded-2xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-500 text-xs sm:text-sm focus:outline-none focus:border-emerald-500"
                 />
 
-                {/* Send Button */}
+                {/* Send / Save Button */}
                 <button
                   type="submit"
                   disabled={!inputText.trim()}
-                  className="p-2 sm:p-3.5 rounded-xl sm:rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all shadow-lg shadow-emerald-600/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 active:scale-95"
+                  className={`p-2 sm:p-3.5 rounded-xl sm:rounded-2xl text-white font-bold transition-all shadow-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 active:scale-95 ${
+                    editingMessage
+                      ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30'
+                      : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20'
+                  }`}
+                  title={editingMessage ? 'حفظ التعديل' : 'إرسال'}
                 >
-                  <Send className="w-4 h-4 sm:w-5 sm:h-5" />
+                  {editingMessage ? (
+                    <Check className="w-4 h-4 sm:w-5 sm:h-5" />
+                  ) : (
+                    <Send className="w-4 h-4 sm:w-5 sm:h-5" />
+                  )}
                 </button>
               </form>
             )}
@@ -1368,82 +1587,57 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
         </div>
       )}
 
-      {/* WhatsApp-Style View Once Fullscreen Modal */}
-      {viewOnceModal && (
-        <div className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between p-4 sm:p-6 backdrop-blur-md select-none" dir="rtl">
-          {/* Top Bar */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-white">
-              <span className="w-7 h-7 rounded-full border-2 border-emerald-400 flex items-center justify-center font-black text-sm text-emerald-400">
-                1
-              </span>
+      {/* Delete Confirmation Modal */}
+      {deleteModalMsg && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in" dir="rtl">
+          <div className="w-full max-w-sm rounded-2xl bg-neutral-900 border border-neutral-800 p-5 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-950/60 border border-rose-800/60 flex items-center justify-center text-rose-400 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
               <div>
-                <span className="font-bold text-sm block">صورة تُعرض لمرة واحدة فقط</span>
-                <span className="text-[11px] text-neutral-400 font-tajawal">
-                  بمجرد إغلاق هذه النافذة، ستُحذف الصورة نهائياً ولن تتمكن من رؤيتها مجدداً.
-                </span>
+                <h4 className="font-cairo font-bold text-sm text-white">حذف الرسالة</h4>
+                <p className="text-xs text-neutral-400 font-tajawal">اختر نوع الحذف المطلوب لهذه الرسالة:</p>
               </div>
             </div>
 
-            <button
-              onClick={handleCloseViewOnceModal}
-              className="p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 text-white cursor-pointer transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          </div>
-
-          {/* Image Display */}
-          <div className="flex-1 flex items-center justify-center p-4 min-h-0">
-            <div className="relative max-h-full max-w-full rounded-2xl overflow-hidden border border-neutral-800 shadow-2xl bg-neutral-950 flex items-center justify-center min-h-[260px] min-w-[260px]">
-              {viewOnceImgLoading && !viewOnceImgError && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-950/80 z-10 text-emerald-400">
-                  <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
-                  <span className="text-xs text-neutral-300 font-tajawal">جاري فتح صورة العرض لمرة واحدة بأمان...</span>
-                </div>
+            <div className="space-y-2 pt-2">
+              {deleteModalMsg.senderId === user?.id && !deleteModalMsg.isDeleted && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteMessage(deleteModalMsg.id, 'everyone')}
+                  className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98 shadow-md shadow-rose-600/20"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>حذف لدى الجميع</span>
+                </button>
               )}
-
-              {viewOnceImgError ? (
-                <div className="flex flex-col items-center justify-center p-8 text-center space-y-3">
-                  <div className="w-12 h-12 rounded-full bg-rose-950/60 border border-rose-800 flex items-center justify-center text-rose-400">
-                    <AlertCircle className="w-6 h-6" />
-                  </div>
-                  <div className="text-sm font-bold text-rose-300 font-cairo">
-                    انتهت صلاحية الصورة أو تم فتحها مسبقاً
-                  </div>
-                  <p className="text-xs text-neutral-400 max-w-xs font-tajawal">
-                    تم مسح الصورة لضمان الخصوصية وفق نظام العرض لمرة واحدة.
-                  </p>
-                </div>
-              ) : viewOnceBlobUrl ? (
-                <img
-                  src={viewOnceBlobUrl}
-                  alt="View once content"
-                  className="max-h-[75vh] max-w-full rounded-2xl object-contain shadow-2xl border border-neutral-800 pointer-events-none select-none transition-opacity duration-300"
-                  onContextMenu={e => e.preventDefault()}
-                />
-              ) : null}
+              <button
+                type="button"
+                onClick={() => handleDeleteMessage(deleteModalMsg.id, 'me')}
+                className="w-full py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98"
+              >
+                <span>حذف لدي فقط</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteModalMsg(null)}
+                className="w-full py-2 px-4 rounded-xl text-neutral-400 hover:text-white text-xs font-semibold cursor-pointer transition-colors"
+              >
+                إلغاء
+              </button>
             </div>
-          </div>
-
-          {/* Bottom dismiss button */}
-          <div className="flex justify-center pb-2">
-            <button
-              onClick={handleCloseViewOnceModal}
-              className="px-6 py-2.5 rounded-2xl bg-neutral-900 border border-neutral-700 text-white font-bold text-xs hover:bg-neutral-800 cursor-pointer shadow-lg active:scale-95 transition-all"
-            >
-              إغلاق وحذف الصورة نهائياً
-            </button>
           </div>
         </div>
       )}
 
-      {/* Normal Image Lightbox Modal */}
+      {/* Normal Image Lightbox Modal with Subtle Watermark & Anti-Save */}
       {lightboxImage && (
         <div
-          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col justify-between p-4 sm:p-6 animate-in fade-in select-none"
+          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col justify-between p-4 sm:p-6 animate-in fade-in select-none"
           dir="rtl"
           onClick={() => setLightboxImage(null)}
+          onContextMenu={e => e.preventDefault()}
         >
           {/* Top Bar */}
           <div className="flex items-center justify-between" onClick={e => e.stopPropagation()}>
@@ -1458,13 +1652,34 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             </button>
           </div>
 
-          {/* Image Display */}
+          {/* Image Display with subtle watermark overlay */}
           <div className="flex-1 flex items-center justify-center p-4 min-h-0" onClick={e => e.stopPropagation()}>
-            <img
-              src={lightboxImage.url}
-              alt={lightboxImage.title || 'معاينة'}
-              className="max-h-[80vh] max-w-full rounded-2xl object-contain shadow-2xl border border-neutral-800"
-            />
+            <div className="relative select-none flex items-center justify-center max-h-[80vh] max-w-full">
+              <img
+                src={lightboxImage.url}
+                alt={lightboxImage.title || 'معاينة'}
+                draggable={false}
+                onContextMenu={e => e.preventDefault()}
+                onDragStart={e => e.preventDefault()}
+                className="max-h-[80vh] max-w-full rounded-2xl object-contain shadow-2xl border border-neutral-800 select-none"
+              />
+              {/* Discreet watermark overlay */}
+              <div className="absolute inset-0 pointer-events-none select-none flex flex-col justify-between p-3 z-20">
+                <div className="flex justify-start">
+                  <span className="text-[10px] font-mono text-white/40 bg-black/50 px-2 py-0.5 rounded backdrop-blur-[1px] border border-white/10">
+                    فضفضه • {user?.username || 'مستخدم'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-center rotate-[-22deg] opacity-20 text-white font-mono text-xs sm:text-base tracking-widest uppercase select-none pointer-events-none drop-shadow">
+                  {user?.username || 'FADFADA'} • {new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                </div>
+                <div className="flex justify-end">
+                  <span className="text-[9px] font-mono text-white/40 bg-black/50 px-2 py-0.5 rounded backdrop-blur-[1px] border border-white/10">
+                    ID: {user?.id?.slice(0, 8) || 'user'} • {new Date().toLocaleDateString('ar-EG')}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Bottom dismiss button */}

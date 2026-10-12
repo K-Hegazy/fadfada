@@ -571,6 +571,25 @@ function initSchema(db: SqlDatabase) {
   try { db.run("ALTER TABLE private_messages ADD COLUMN viewed_at DATETIME"); } catch {}
   try { db.run("ALTER TABLE private_messages ADD COLUMN view_once_token TEXT DEFAULT ''"); } catch {}
 
+  // Safe migrations for message reactions, editing, and deletion
+  try { db.run("ALTER TABLE private_messages ADD COLUMN is_edited INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE private_messages ADD COLUMN edited_at DATETIME"); } catch {}
+  try { db.run("ALTER TABLE private_messages ADD COLUMN is_deleted INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE private_messages ADD COLUMN deleted_for_all INTEGER DEFAULT 0"); } catch {}
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS private_message_deletions (
+        message_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (message_id, user_id)
+      )
+    `);
+  } catch {}
+  try { db.run("CREATE INDEX IF NOT EXISTS idx_reactions_msg ON private_reactions(message_id)"); } catch {}
+  try { db.run("CREATE INDEX IF NOT EXISTS idx_reactions_user ON private_reactions(user_id)"); } catch {}
+  try { db.run("CREATE INDEX IF NOT EXISTS idx_del_msg_user ON private_message_deletions(message_id, user_id)"); } catch {}
+
   // Safe migrations for events enhancements
   try { db.run("ALTER TABLE events ADD COLUMN image_url TEXT DEFAULT ''"); } catch {}
   try { db.run("ALTER TABLE events ADD COLUMN status TEXT DEFAULT 'upcoming'"); } catch {}

@@ -126,6 +126,22 @@ export interface ConversationItem {
   updatedAt: string;
 }
 
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  hasReacted?: boolean;
+  users?: string[];
+}
+
+export interface MessageReplyInfo {
+  id: string;
+  senderId: string;
+  senderUsername: string;
+  content: string;
+  type: string;
+  mediaUrl?: string;
+}
+
 export interface PrivateMessage {
   id: string;
   conversationId?: string;
@@ -143,6 +159,13 @@ export interface PrivateMessage {
   viewedAt?: string;
   status?: 'sending' | 'sent' | 'failed';
   createdAt: string;
+  replyToId?: string | null;
+  replyTo?: MessageReplyInfo | null;
+  isEdited?: boolean;
+  editedAt?: string | null;
+  isDeleted?: boolean;
+  deletedForAll?: boolean;
+  reactions?: MessageReaction[];
 }
 
 export type ShopItemType = 'badge' | 'pin_profile' | 'card_frame' | 'special_feature';

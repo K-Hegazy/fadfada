@@ -75,7 +75,6 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [inputText, setInputText] = useState<string>('');
-  const [viewOnceEnabled, setViewOnceEnabled] = useState<boolean>(false);
   const [selfDestructEnabled, setSelfDestructEnabled] = useState<boolean>(false);
   const [activeSelfDestruct, setActiveSelfDestruct] = useState<{
     messageId: string;
@@ -189,16 +188,6 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
       }
     });
 
-    const unsubViewOnce = socketService.on('message:view_once_opened', (data: any) => {
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === data.messageId
-            ? { ...m, isViewed: true, viewedAt: data.viewedAt, mediaUrl: '' }
-            : m
-        )
-      );
-    });
-
     const unsubDestroyed = socketService.on('message:destroyed', (data: any) => {
       setMessages(prev =>
         prev.map(m =>
@@ -213,6 +202,44 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
             : m
         )
       );
+    });
+
+    const unsubReaction = socketService.on('message:reaction', (data: any) => {
+      if (data.messageId) {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === data.messageId ? { ...m, reactions: data.reactions } : m
+          )
+        );
+      }
+    });
+
+    const unsubEdit = socketService.on('message:edited', (data: any) => {
+      if (data.messageId) {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === data.messageId
+              ? { ...m, content: data.content, isEdited: true, editedAt: data.editedAt }
+              : m
+          )
+        );
+      }
+    });
+
+    const unsubDelete = socketService.on('message:deleted', (data: any) => {
+      if (data.messageId) {
+        if (data.mode === 'me') {
+          setMessages(prev => prev.filter(m => m.id !== data.messageId));
+        } else {
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === data.messageId
+                ? { ...m, isDeleted: true, content: '🚫 تم حذف هذه الرسالة', mediaUrl: '' }
+                : m
+            )
+          );
+        }
+      }
     });
 
     const unsubTypingStart = socketService.on('typing:start', (data: any) => {
@@ -235,8 +262,10 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
 
     return () => {
       unsubMsg();
-      unsubViewOnce();
       unsubDestroyed();
+      unsubReaction();
+      unsubEdit();
+      unsubDelete();
       unsubTypingStart();
       unsubTypingStop();
       unsubPresence();
@@ -416,7 +445,6 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
     const reader = new FileReader();
     reader.onload = async () => {
       const tempId = 'temp_img_' + Date.now();
-      const isViewOnce = viewOnceEnabled;
       const isSelfDestruct = selfDestructEnabled;
 
       const optimisticMsg: Message = {
@@ -425,12 +453,9 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
         recipientId: targetUser.id,
         content: isSelfDestruct
           ? '⏳ صورة مؤقتة ذاتية التدمير'
-          : isViewOnce
-          ? '📷 صورة للعرض لمرة واحدة'
           : '📷 صورة مرفقة',
         type: 'image',
         mediaUrl: reader.result as string,
-        isViewOnce,
         isSelfDestruct,
         selfDestructDuration: 10,
         isViewed: false,
@@ -440,7 +465,6 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
 
       setMessages(prev => [...prev, optimisticMsg]);
       scrollToBottom();
-      setViewOnceEnabled(false);
       setSelfDestructEnabled(false);
 
       try {
@@ -459,12 +483,9 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
             body: JSON.stringify({
               content: isSelfDestruct
                 ? '⏳ صورة مؤقتة ذاتية التدمير'
-                : isViewOnce
-                ? '📷 صورة للعرض لمرة واحدة'
                 : '📷 صورة مرفقة',
               type: 'image',
               mediaUrl: uploadRes.url,
-              isViewOnce,
               isSelfDestruct,
               selfDestructDuration: isSelfDestruct ? 10 : 0
             })
@@ -831,7 +852,7 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
                           className="w-full px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-amber-600/30 active:scale-95 transition-all"
                         >
                           <Eye className="w-4 h-4" />
-                          <span>انقر للمشاهدة لمرة واحدة قبل تدميرها</span>
+                          <span>انقر لمشاهدة الصورة ذاتية التدمير</span>
                         </button>
                       )}
                     </div>
@@ -847,7 +868,10 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
                       <img
                         src={getMediaUrl(msg.mediaUrl)}
                         alt="مرفق"
-                        className="rounded-xl max-h-56 object-cover border border-black/20"
+                        draggable={false}
+                        onContextMenu={e => e.preventDefault()}
+                        onDragStart={e => e.preventDefault()}
+                        className="rounded-xl max-h-56 object-cover border border-black/20 select-none pointer-events-auto"
                         loading="lazy"
                       />
                       {msg.content && msg.content !== '📷 صورة مرفقة' && (
@@ -974,29 +998,11 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
           className="hidden"
         />
 
-        {/* View once toggle */}
-        <button
-          type="button"
-          onClick={() => {
-            setViewOnceEnabled(prev => !prev);
-            if (!viewOnceEnabled) setSelfDestructEnabled(false);
-          }}
-          className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl flex items-center justify-center text-[10px] sm:text-xs font-black transition-all cursor-pointer shrink-0 active:scale-95 ${
-            viewOnceEnabled
-              ? 'bg-amber-500 text-black shadow-md shadow-amber-500/30 font-bold'
-              : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
-          }`}
-          title={viewOnceEnabled ? 'العرض لمرة واحدة مفعّل ➀' : 'تفعيل العرض لمرة واحدة ➀'}
-        >
-          ➀
-        </button>
-
         {/* Self destruct toggle */}
         <button
           type="button"
           onClick={() => {
             setSelfDestructEnabled(prev => !prev);
-            if (!selfDestructEnabled) setViewOnceEnabled(false);
           }}
           className={`px-2 py-1 rounded-lg sm:rounded-xl flex items-center gap-1 text-[10px] sm:text-xs font-bold transition-all cursor-pointer shrink-0 active:scale-95 ${
             selfDestructEnabled

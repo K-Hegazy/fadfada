@@ -2873,11 +2873,20 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req: Request, res
 
     const limit = Math.min(100, Math.max(10, parseInt(req.query.limit as string) || 60));
     const before = req.query.before as string;
-    let sql = `SELECT m.*, u.username as sender_username, u.avatar_url as sender_avatar
+    let sql = `SELECT m.*, u.username as sender_username, u.avatar_url as sender_avatar,
+                      r.id as reply_id,
+                      r.sender_id as reply_sender_id,
+                      ru.username as reply_sender_username,
+                      r.content as reply_content,
+                      r.type as reply_type,
+                      r.is_deleted as reply_is_deleted
                FROM private_messages m
                JOIN users u ON m.sender_id = u.id
-               WHERE m.conversation_id = ?`;
-    const params: any[] = [convId];
+               LEFT JOIN private_messages r ON m.reply_to_id = r.id
+               LEFT JOIN users ru ON r.sender_id = ru.id
+               WHERE m.conversation_id = ?
+                 AND m.id NOT IN (SELECT message_id FROM private_message_deletions WHERE user_id = ?)`;
+    const params: any[] = [convId, session.userId];
     if (before) {
       sql += ` AND m.created_at < ?`;
       params.push(before);
@@ -2887,6 +2896,32 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req: Request, res
 
     const rowsDesc = queryAll(db, sql, params);
     const rows = [...rowsDesc].reverse();
+
+    // Fetch reactions for messages
+    const msgIds = rows.map(r => r.id);
+    const reactionsByMsgId: Record<string, { emoji: string; count: number; hasReacted: boolean }[]> = {};
+    if (msgIds.length > 0) {
+      const placeholders = msgIds.map(() => '?').join(',');
+      const reactionRows = queryAll(
+        db,
+        `SELECT message_id, emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as user_ids
+         FROM private_reactions
+         WHERE message_id IN (${placeholders})
+         GROUP BY message_id, emoji`,
+        msgIds
+      );
+      for (const rx of reactionRows) {
+        if (!reactionsByMsgId[rx.message_id]) {
+          reactionsByMsgId[rx.message_id] = [];
+        }
+        const userList = (rx.user_ids || '').split(',');
+        reactionsByMsgId[rx.message_id].push({
+          emoji: rx.emoji,
+          count: rx.count,
+          hasReacted: userList.includes(session.userId)
+        });
+      }
+    }
 
     const otherUserId = conv.user1_id === session.userId ? conv.user2_id : conv.user1_id;
     const otherUser = queryOne(
@@ -2915,34 +2950,34 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req: Request, res
       messages: rows.map(m => {
         const isViewOnce = m.is_view_once === 1;
         const isViewed = m.is_viewed === 1;
+        const isDeleted = m.is_deleted === 1;
         let mediaUrl = m.media_url;
         // Self-destruct and View-once protection: Raw mediaUrl is NEVER returned in chat history
-        if (isViewOnce || m.is_self_destruct === 1) {
+        if (isViewOnce || m.is_self_destruct === 1 || isDeleted) {
           mediaUrl = '';
         }
 
         let displayContent = m.content;
-        if (m.is_self_destruct === 1) {
+        if (isDeleted) {
+          displayContent = '🚫 تم حذف هذه الرسالة';
+        } else if (m.is_self_destruct === 1) {
           if (m.is_destroyed === 1) {
             displayContent = '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها';
           } else {
             displayContent = '⏳ صورة مؤقتة ذاتية التدمير';
           }
         } else if (isViewOnce) {
-          if (isViewed) {
-            displayContent = '⚠️ تم فتح الصورة لمرة واحدة وانتهت صلاحيتها';
-          } else {
-            displayContent = '📷 صورة تُعرض لمرة واحدة';
-          }
+          displayContent = isViewed ? '⚠️ تم فتح الصورة وانتهت صلاحيتها' : '📷 صورة قديمة';
         }
 
         return {
           id: m.id,
+          conversationId: convId,
           senderId: m.sender_id,
           recipientId: m.recipient_id,
-          content: m.is_destroyed === 1 ? '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها' : displayContent,
+          content: isDeleted ? '🚫 تم حذف هذه الرسالة' : (m.is_destroyed === 1 ? '⚠️ تم فتح الصورة ذاتية التدمير وانتهت صلاحيتها' : displayContent),
           type: m.type,
-          mediaUrl: m.is_destroyed === 1 ? '' : mediaUrl,
+          mediaUrl: (isDeleted || m.is_destroyed === 1) ? '' : mediaUrl,
           isRead: m.is_read === 1,
           isSelfDestruct: m.is_self_destruct === 1,
           selfDestructDuration: m.self_destruct_duration,
@@ -2950,7 +2985,20 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req: Request, res
           isViewOnce,
           isViewed,
           viewedAt: m.viewed_at,
-          createdAt: m.created_at
+          createdAt: m.created_at,
+          replyToId: m.reply_to_id || null,
+          replyTo: m.reply_id ? {
+            id: m.reply_id,
+            senderId: m.reply_sender_id,
+            senderUsername: m.reply_sender_username || 'مستخدم',
+            content: m.reply_is_deleted === 1 ? '🚫 تم حذف هذه الرسالة' : m.reply_content,
+            type: m.reply_type
+          } : null,
+          isEdited: m.is_edited === 1,
+          editedAt: m.edited_at,
+          isDeleted,
+          deletedForAll: m.deleted_for_all === 1,
+          reactions: reactionsByMsgId[m.id] || []
         };
       }),
       recipient: {
@@ -3071,14 +3119,35 @@ app.post('/api/conversations/:id/messages', requireAuth, messageSendRateLimiter,
 
     const msgId = 'msg_' + Math.random().toString(36).substring(2, 9);
     const msgType = type || 'text';
-    const viewOnceToken = isViewOnce ? Math.random().toString(36).substring(2, 15) : '';
+
+    // Resolve replied-to message if replyToId is provided
+    let replyData: any = null;
+    if (replyToId) {
+      const rMsg = queryOne(
+        db,
+        `SELECT m.id, m.sender_id, m.content, m.type, m.is_deleted, u.username as sender_username
+         FROM private_messages m
+         JOIN users u ON m.sender_id = u.id
+         WHERE m.id = ?`,
+        [replyToId]
+      );
+      if (rMsg) {
+        replyData = {
+          id: rMsg.id,
+          senderId: rMsg.sender_id,
+          senderUsername: rMsg.sender_username || 'مستخدم',
+          content: rMsg.is_deleted === 1 ? '🚫 تم حذف هذه الرسالة' : rMsg.content,
+          type: rMsg.type
+        };
+      }
+    }
 
     db.run(
       `INSERT INTO private_messages (
         id, conversation_id, sender_id, recipient_id, content, type,
         reply_to_id, is_self_destruct, self_destruct_duration, media_url,
         is_view_once, is_viewed, view_once_token
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '')`,
       [
         msgId,
         convId,
@@ -3089,9 +3158,7 @@ app.post('/api/conversations/:id/messages', requireAuth, messageSendRateLimiter,
         replyToId || null,
         isSelfDestruct ? 1 : 0,
         selfDestructDuration || 0,
-        mediaUrl || '',
-        isViewOnce ? 1 : 0,
-        viewOnceToken
+        mediaUrl || ''
       ]
     );
 
@@ -3119,9 +3186,14 @@ app.post('/api/conversations/:id/messages', requireAuth, messageSendRateLimiter,
         isSelfDestruct: !!isSelfDestruct,
         selfDestructDuration: selfDestructDuration || 0,
         isDestroyed: false,
-        isViewOnce: !!isViewOnce,
+        isViewOnce: false,
         isViewed: false,
         isRead: false,
+        replyToId: replyToId || null,
+        replyTo: replyData,
+        isEdited: false,
+        isDeleted: false,
+        reactions: [],
         createdAt: new Date().toISOString()
       }
     };
@@ -3427,6 +3499,267 @@ app.post('/api/messages/:id/destroy-now', requireAuth, async (req: Request, res:
     return res.json({ success: true });
   }
 });
+
+// ==========================================
+// PRIVATE MESSAGE REACTIONS, EDIT & DELETE
+// ==========================================
+
+// 1. Emoji Reactions on Private Messages (Add / Remove / Change)
+app.post('/api/messages/:id/reactions', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const msgId = req.params.id;
+    const { emoji } = req.body;
+
+    if (!emoji || typeof emoji !== 'string' || emoji.length > 10) {
+      return res.status(400).json({ error: 'رمز التفاعل غير صالح' });
+    }
+
+    const db = await getDb();
+    const msg = queryOne(
+      db,
+      "SELECT * FROM private_messages WHERE id = ? AND (sender_id = ? OR recipient_id = ?)",
+      [msgId, session.userId, session.userId]
+    );
+
+    if (!msg) {
+      return res.status(404).json({ error: 'الرسالة غير موجودة أو غير مصرح لك بالتفاعل معها' });
+    }
+    if (msg.is_deleted === 1) {
+      return res.status(400).json({ error: 'لا يمكن التفاعل مع رسالة محذوفة' });
+    }
+
+    // Check if user already reacted with this exact emoji
+    const existingSame = queryOne(
+      db,
+      "SELECT id FROM private_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?",
+      [msgId, session.userId, emoji]
+    );
+
+    let action = 'added';
+    if (existingSame) {
+      // Toggle off / remove reaction
+      db.run("DELETE FROM private_reactions WHERE id = ?", [existingSame.id]);
+      action = 'removed';
+    } else {
+      // One reaction per user per message - remove any previous reaction by this user on this message
+      db.run("DELETE FROM private_reactions WHERE message_id = ? AND user_id = ?", [msgId, session.userId]);
+      const rxId = 'rx_' + Math.random().toString(36).substring(2, 9);
+      db.run(
+        "INSERT INTO private_reactions (id, message_id, user_id, emoji) VALUES (?, ?, ?, ?)",
+        [rxId, msgId, session.userId, emoji]
+      );
+      action = 'added';
+    }
+    saveDb();
+
+    // Query aggregated reactions for this message
+    const reactionRows = queryAll(
+      db,
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as user_ids
+       FROM private_reactions
+       WHERE message_id = ?
+       GROUP BY emoji`,
+      [msgId]
+    );
+
+    const fullReactions = reactionRows.map(r => ({
+      emoji: r.emoji,
+      count: r.count,
+      users: (r.user_ids || '').split(',')
+    }));
+
+    // Broadcast realtime event to both conversation participants
+    const sendReactionEvent = (targetUserId: string) => {
+      const userReactions = fullReactions.map(r => ({
+        emoji: r.emoji,
+        count: r.count,
+        hasReacted: r.users.includes(targetUserId)
+      }));
+      sendToUser(targetUserId, {
+        type: 'message:reaction',
+        conversationId: msg.conversation_id,
+        messageId: msg.id,
+        emoji,
+        action,
+        reactions: userReactions
+      });
+    };
+
+    sendReactionEvent(msg.sender_id);
+    sendReactionEvent(msg.recipient_id);
+
+    return res.json({
+      success: true,
+      action,
+      reactions: fullReactions.map(r => ({
+        emoji: r.emoji,
+        count: r.count,
+        hasReacted: r.users.includes(session.userId)
+      }))
+    });
+  } catch (error) {
+    console.error('Reaction error:', error);
+    return res.status(500).json({ error: 'خطأ أثناء تسجيل التفاعل' });
+  }
+});
+
+// 2. Edit Private Message (Sender text only)
+const handleEditMessage = async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const msgId = req.params.id;
+    const { content } = req.body;
+
+    if (!content || typeof content !== 'string' || !content.trim()) {
+      return res.status(400).json({ error: 'محتوى الرسالة لا يمكن أن يكون فارغاً' });
+    }
+    if (content.trim().length > 3000) {
+      return res.status(400).json({ error: 'محتوى الرسالة طويل جداً' });
+    }
+
+    const db = await getDb();
+    const msg = queryOne(
+      db,
+      "SELECT * FROM private_messages WHERE id = ?",
+      [msgId]
+    );
+
+    if (!msg) {
+      return res.status(404).json({ error: 'الرسالة غير موجودة' });
+    }
+    if (msg.sender_id !== session.userId) {
+      return res.status(403).json({ error: 'غير مصرح لك بتعديل هذه الرسالة. فقط المرسل يمكنه التعديل.' });
+    }
+    if (msg.is_deleted === 1) {
+      return res.status(400).json({ error: 'لا يمكن تعديل رسالة تم حذفها' });
+    }
+    if (msg.type !== 'text') {
+      return res.status(400).json({ error: 'يمكن فقط تعديل الرسائل النصية' });
+    }
+    if (msg.is_self_destruct === 1) {
+      return res.status(400).json({ error: 'لا يمكن تعديل الرسائل ذاتية التدمير' });
+    }
+
+    // Check moderation filter on edited text
+    const modCheck = checkMessageContent(session.userId, content, db);
+    if (!modCheck.allowed) {
+      return res.status(400).json({ error: modCheck.reason });
+    }
+
+    const cleanContent = content.trim();
+    const nowIso = new Date().toISOString();
+
+    db.run(
+      "UPDATE private_messages SET content = ?, is_edited = 1, edited_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [cleanContent, msgId]
+    );
+    saveDb();
+
+    const editEvent = {
+      type: 'message:edited',
+      conversationId: msg.conversation_id,
+      messageId: msg.id,
+      content: cleanContent,
+      isEdited: true,
+      editedAt: nowIso
+    };
+
+    sendToUser(msg.recipient_id, editEvent);
+    sendToUser(msg.sender_id, editEvent);
+
+    return res.json({
+      success: true,
+      message: {
+        id: msg.id,
+        content: cleanContent,
+        isEdited: true,
+        editedAt: nowIso
+      }
+    });
+  } catch (error) {
+    console.error('Edit message error:', error);
+    return res.status(500).json({ error: 'خطأ أثناء تعديل الرسالة' });
+  }
+};
+
+app.put('/api/messages/:id', requireAuth, handleEditMessage);
+app.post('/api/messages/:id/edit', requireAuth, handleEditMessage);
+
+// 3. Delete Private Message (For everyone if sender, or for me)
+const handleDeleteMessage = async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const msgId = req.params.id;
+    const mode = (req.body?.mode || req.query?.mode || 'everyone') as 'everyone' | 'me';
+
+    const db = await getDb();
+    const msg = queryOne(
+      db,
+      "SELECT * FROM private_messages WHERE id = ? AND (sender_id = ? OR recipient_id = ?)",
+      [msgId, session.userId, session.userId]
+    );
+
+    if (!msg) {
+      return res.status(404).json({ error: 'الرسالة غير موجودة' });
+    }
+
+    if (mode === 'everyone') {
+      if (msg.sender_id !== session.userId) {
+        return res.status(403).json({ error: 'فقط مرسل الرسالة يمكنه الحذف لدى الجميع' });
+      }
+
+      // Remove uploaded file from disk if applicable
+      if (msg.media_url && msg.media_url.startsWith('/uploads/')) {
+        const fn = path.basename(msg.media_url);
+        const fp = path.join(UPLOAD_DIR, fn);
+        if (fs.existsSync(fp)) {
+          try { fs.unlinkSync(fp); } catch {}
+        }
+      }
+
+      db.run(
+        "UPDATE private_messages SET is_deleted = 1, deleted_for_all = 1, content = '🚫 تم حذف هذه الرسالة', media_url = '' WHERE id = ?",
+        [msgId]
+      );
+      saveDb();
+
+      const delEvent = {
+        type: 'message:deleted',
+        conversationId: msg.conversation_id,
+        messageId: msg.id,
+        mode: 'everyone',
+        content: '🚫 تم حذف هذه الرسالة'
+      };
+      sendToUser(msg.recipient_id, delEvent);
+      sendToUser(msg.sender_id, delEvent);
+
+      return res.json({ success: true, mode: 'everyone' });
+    } else {
+      // Delete for current user only
+      db.run(
+        "INSERT OR IGNORE INTO private_message_deletions (message_id, user_id) VALUES (?, ?)",
+        [msgId, session.userId]
+      );
+      saveDb();
+
+      sendToUser(session.userId, {
+        type: 'message:deleted',
+        conversationId: msg.conversation_id,
+        messageId: msg.id,
+        mode: 'me'
+      });
+
+      return res.json({ success: true, mode: 'me' });
+    }
+  } catch (error) {
+    console.error('Delete message error:', error);
+    return res.status(500).json({ error: 'خطأ أثناء حذف الرسالة' });
+  }
+};
+
+app.post('/api/messages/:id/delete', requireAuth, handleDeleteMessage);
+app.delete('/api/messages/:id', requireAuth, handleDeleteMessage);
 
 // ==========================================
 // 5. CHAT ROOMS ("الغرف والمجالس")

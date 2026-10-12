@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Clock, ShieldAlert, X, AlertTriangle, Loader2 } from 'lucide-react';
 import { apiRequest, loadSecureMediaBlob } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 interface SelfDestructModalProps {
   messageId: string;
@@ -15,6 +16,7 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
   duration = 10,
   onClose
 }) => {
+  const { user } = useAuth();
   const [secondsLeft, setSecondsLeft] = useState<number>(duration);
   const [imageLoading, setImageLoading] = useState<boolean>(true);
   const [imageError, setImageError] = useState<boolean>(false);
@@ -93,6 +95,7 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
     <div
       className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col items-center justify-between p-4 sm:p-6 animate-in fade-in select-none"
       dir="rtl"
+      onContextMenu={e => e.preventDefault()}
     >
       {/* Top Banner */}
       <div className="w-full max-w-lg flex items-center justify-between bg-neutral-900/90 border border-amber-500/40 rounded-2xl p-3.5 shadow-xl">
@@ -102,7 +105,7 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
           </div>
           <div>
             <div className="text-xs font-bold text-amber-300 font-cairo">
-              صورة مؤقتة ذاتية التدمير (عرض لمرة واحدة)
+              صورة مؤقتة ذاتية التدمير
             </div>
             <div className="text-[10px] text-neutral-400 font-tajawal">
               يتم تدمير الصورة ومسحها من السيرفر نهائياً فور انتهاء العداد
@@ -150,12 +153,32 @@ export const SelfDestructModal: React.FC<SelfDestructModalProps> = ({
               </p>
             </div>
           ) : blobUrl ? (
-            <img
-              src={blobUrl}
-              alt="صورة ذاتية التدمير"
-              className="max-h-[68vh] sm:max-h-[72vh] w-auto max-w-full object-contain pointer-events-none select-none transition-opacity duration-300"
-              onContextMenu={e => e.preventDefault()}
-            />
+            <div className="relative select-none flex items-center justify-center">
+              <img
+                src={blobUrl}
+                alt="صورة ذاتية التدمير"
+                draggable={false}
+                className="max-h-[68vh] sm:max-h-[72vh] w-auto max-w-full object-contain pointer-events-none select-none transition-opacity duration-300"
+                onContextMenu={e => e.preventDefault()}
+                onDragStart={e => e.preventDefault()}
+              />
+              {/* Subtle watermark overlay */}
+              <div className="absolute inset-0 pointer-events-none select-none flex flex-col justify-between p-3 z-20">
+                <div className="flex justify-start">
+                  <span className="text-[10px] font-mono text-white/40 bg-black/50 px-2 py-0.5 rounded backdrop-blur-[1px] border border-white/10">
+                    فضفضه • {user?.username || 'مستخدم'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-center rotate-[-22deg] opacity-20 text-white font-mono text-xs sm:text-sm tracking-widest uppercase select-none pointer-events-none drop-shadow">
+                  {user?.username || 'FADFADA'} • {new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                </div>
+                <div className="flex justify-end">
+                  <span className="text-[9px] font-mono text-white/40 bg-black/50 px-2 py-0.5 rounded backdrop-blur-[1px] border border-white/10">
+                    ID: {user?.id?.slice(0, 8) || 'user'} • {new Date().toLocaleDateString('ar-EG')}
+                  </span>
+                </div>
+              </div>
+            </div>
           ) : null}
         </div>
       </div>
