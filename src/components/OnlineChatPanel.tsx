@@ -55,6 +55,7 @@ interface OnlineChatPanelProps {
     vipLevel: string;
     isOnline: boolean;
     equippedBadge?: string | null;
+    hasCreatorBadge?: boolean;
     isGuest?: boolean;
   };
   onClose: () => void;
@@ -712,6 +713,12 @@ export const OnlineChatPanel: React.FC<OnlineChatPanelProps> = ({
               </span>
               {isUserOwner({ role: targetUser.role, username: targetUser.username }) && (
                 <OwnerBadge size="xs" />
+              )}
+              {targetUser.hasCreatorBadge && (
+                <span className="text-[10px] font-bold text-yellow-300 bg-yellow-950/80 border border-yellow-600/60 px-1.5 py-0.2 rounded shrink-0 flex items-center gap-0.5" title="شعار «المبدع»">
+                  <span>💡</span>
+                  <span>المبدع</span>
+                </span>
               )}
               {targetUser.equippedBadge && (
                 <span className="text-xs sm:text-sm shrink-0" title="شارة خاصة">

@@ -14,8 +14,9 @@ import { FadfadaAssistantModal } from './components/FadfadaAssistantModal';
 import { EmailVerificationBanner } from './components/EmailVerificationBanner';
 import { LiveToastContainer } from './components/LiveToastContainer';
 import { LegalModal, LegalTab } from './components/LegalModal';
+import { LoginNoticeModal } from './components/LoginNoticeModal';
 import { MessageSquareHeart, Loader2 } from 'lucide-react';
-import { OnlineUserItem } from './types';
+import { OnlineUserItem, LoginNotice } from './types';
 import { apiRequest } from './services/api';
 
 // Code Splitting / Lazy Loading for heavy secondary pages
@@ -30,6 +31,7 @@ const NewsPage = lazy(() => import('./components/NewsPage').then(m => ({ default
 const SettingsPage = lazy(() => import('./components/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const AdminPage = lazy(() => import('./components/AdminPage').then(m => ({ default: m.AdminPage })));
 const RandomChatPage = lazy(() => import('./components/RandomChatPage').then(m => ({ default: m.RandomChatPage })));
+const SuggestionsPage = lazy(() => import('./components/SuggestionsPage').then(m => ({ default: m.SuggestionsPage })));
 
 function PageFallback() {
   return (
@@ -51,6 +53,51 @@ function AppContent() {
   const [giftRecipientId, setGiftRecipientId] = useState<string | null>(null);
   const [assistantOpen, setAssistantOpen] = useState<boolean>(false);
   const [legalModalTab, setLegalModalTab] = useState<LegalTab | null>(null);
+
+  // Post-login popup notice state
+  const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(null);
+  const [showLoginNotice, setShowLoginNotice] = useState<boolean>(false);
+
+  // Fetch Post-Login announcement/message safely
+  React.useEffect(() => {
+    if (!user) {
+      setShowLoginNotice(false);
+      setLoginNotice(null);
+      return;
+    }
+
+    apiRequest<LoginNotice>('/system/login-broadcast')
+      .then(notice => {
+        if (!notice || !notice.enabled || (!notice.title?.trim() && !notice.content?.trim())) {
+          return;
+        }
+        setLoginNotice(notice);
+
+        if (notice.frequency === 'once_per_version') {
+          const key = `fadfada_notice_ver_${user.id}`;
+          const seenVersion = localStorage.getItem(key);
+          if (seenVersion !== String(notice.version)) {
+            setShowLoginNotice(true);
+          }
+        } else {
+          // 'always' at each login session
+          const sessKey = `fadfada_notice_sess_${user.id}`;
+          const seenInSession = sessionStorage.getItem(sessKey);
+          if (!seenInSession) {
+            setShowLoginNotice(true);
+            sessionStorage.setItem(sessKey, '1');
+          }
+        }
+      })
+      .catch(() => {});
+  }, [user?.id]);
+
+  const handleCloseLoginNotice = () => {
+    setShowLoginNotice(false);
+    if (loginNotice && user && loginNotice.frequency === 'once_per_version') {
+      localStorage.setItem(`fadfada_notice_ver_${user.id}`, String(loginNotice.version));
+    }
+  };
 
   // Side Panel Chat State for 'المتواجدون حالياً'
   const [onlineChatTargetUser, setOnlineChatTargetUser] = useState<OnlineUserItem | null>(null);
@@ -426,6 +473,12 @@ function AppContent() {
         </Suspense>
       )}
 
+      {currentTab === 'suggestions' && (
+        <Suspense fallback={<PageFallback />}>
+          <SuggestionsPage />
+        </Suspense>
+      )}
+
       {/* Global Modals */}
       {selectedProfileId && currentTab !== 'online' && (
         <UserProfileModal
@@ -451,6 +504,14 @@ function AppContent() {
         <LegalModal
           initialTab={legalModalTab}
           onClose={() => setLegalModalTab(null)}
+        />
+      )}
+
+      {/* Post-Login Announcement Modal */}
+      {showLoginNotice && loginNotice && (
+        <LoginNoticeModal
+          notice={loginNotice}
+          onClose={handleCloseLoginNotice}
         />
       )}
 

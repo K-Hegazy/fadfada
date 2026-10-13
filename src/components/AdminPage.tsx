@@ -41,15 +41,18 @@ import {
   CheckCheck,
   XCircle,
   Copy,
-  AlertCircle
+  AlertCircle,
+  Lightbulb,
+  Radio
 } from 'lucide-react';
 import { EventsPage } from './EventsPage';
 import { NewsPage } from './NewsPage';
 import { MissionsPage } from './MissionsPage';
+import { LoginNoticeModal } from './LoginNoticeModal';
 
 export const AdminPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'events' | 'news' | 'missions' | 'reports' | 'settings' | 'story_ads' | 'random_chat' | 'audit' | 'payments'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'events' | 'news' | 'missions' | 'reports' | 'settings' | 'story_ads' | 'random_chat' | 'audit' | 'payments' | 'suggestions'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [reportsList, setReportsList] = useState<any[]>([]);
@@ -86,6 +89,29 @@ export const AdminPage: React.FC = () => {
   // Settings states
   const [guestLimit, setGuestLimit] = useState<number>(500);
   const [settingsSaved, setSettingsSaved] = useState<boolean>(false);
+
+  // Independent Room Minute Pricing states (Owner setting)
+  const [roomAudioPrice, setRoomAudioPrice] = useState<number>(2);
+  const [roomVideoPrice, setRoomVideoPrice] = useState<number>(5);
+  const [savingRoomPricing, setSavingRoomPricing] = useState<boolean>(false);
+  const [roomPricingSaved, setRoomPricingSaved] = useState<boolean>(false);
+
+  // Login Broadcast Message states (Owner setting)
+  const [broadcastEnabled, setBroadcastEnabled] = useState<boolean>(false);
+  const [broadcastTitle, setBroadcastTitle] = useState<string>('أهلاً بك في مجتمع فضفضه ✨');
+  const [broadcastContent, setBroadcastContent] = useState<string>('نتمنى لك تجربة راقية وممتعة. فضفض بحرية واحترام مع أصدقائك.');
+  const [broadcastFrequency, setBroadcastFrequency] = useState<'always' | 'once_per_version'>('once_per_version');
+  const [broadcastVersion, setBroadcastVersion] = useState<string>('1');
+  const [broadcastPreviewOpen, setBroadcastPreviewOpen] = useState<boolean>(false);
+  const [savingBroadcast, setSavingBroadcast] = useState<boolean>(false);
+  const [broadcastSaved, setBroadcastSaved] = useState<boolean>(false);
+
+  // Suggestions Management states (Owner & Admin)
+  const [adminSuggestionsList, setAdminSuggestionsList] = useState<any[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState<boolean>(false);
+  const [suggestionFilter, setSuggestionFilter] = useState<string>('all');
+  const [repliesState, setRepliesState] = useState<Record<string, string>>({});
+  const [updatingSugId, setUpdatingSugId] = useState<string | null>(null);
 
   // Story Ads states
   const [storyAdsList, setStoryAdsList] = useState<any[]>([]);
@@ -357,7 +383,144 @@ export const AdminPage: React.FC = () => {
       fetchPaymentOrders();
       fetchPaymentSettings();
     }
+    if (activeTab === 'settings') {
+      fetchRoomPricing();
+      fetchBroadcastSettings();
+    }
+    if (activeTab === 'suggestions') {
+      fetchAdminSuggestions();
+    }
   }, [activeTab]);
+
+  const fetchRoomPricing = async () => {
+    try {
+      const res = await apiRequest('/admin/rooms-pricing');
+      if (res) {
+        setRoomAudioPrice(Number(res.audioCostPerMinute) || 2);
+        setRoomVideoPrice(Number(res.videoCostPerMinute) || 5);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchBroadcastSettings = async () => {
+    try {
+      const res = await apiRequest('/system/login-broadcast');
+      if (res) {
+        setBroadcastEnabled(!!res.enabled);
+        setBroadcastTitle(res.title || 'أهلاً بك في مجتمع فضفضه ✨');
+        setBroadcastContent(res.content || '');
+        setBroadcastFrequency(res.frequency === 'always' ? 'always' : 'once_per_version');
+        setBroadcastVersion(res.version || '1');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchAdminSuggestions = async () => {
+    try {
+      setSuggestionsLoading(true);
+      const res = await apiRequest('/admin/suggestions');
+      setAdminSuggestionsList(res.suggestions || []);
+      const map: Record<string, string> = {};
+      (res.suggestions || []).forEach((s: any) => {
+        map[s.id] = s.admin_reply || '';
+      });
+      setRepliesState(map);
+    } catch (e) {
+      console.error('Fetch suggestions error:', e);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  };
+
+  const handleSaveRoomPricing = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingRoomPricing(true);
+    try {
+      await apiRequest('/admin/rooms-pricing', {
+        method: 'POST',
+        body: JSON.stringify({
+          audioCostPerMinute: Number(roomAudioPrice),
+          videoCostPerMinute: Number(roomVideoPrice)
+        })
+      });
+      setRoomPricingSaved(true);
+      showNotification('تم حفظ أسعار الدقيقة للرومات الصوتية ورومات الفيديو بنجاح');
+      setTimeout(() => setRoomPricingSaved(false), 2500);
+    } catch (err: any) {
+      alert(err.message || 'فشل حفظ أسعار الرومات');
+    } finally {
+      setSavingRoomPricing(false);
+    }
+  };
+
+  const handleSaveBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingBroadcast(true);
+    try {
+      await apiRequest('/admin/system/login-broadcast', {
+        method: 'POST',
+        body: JSON.stringify({
+          enabled: broadcastEnabled,
+          title: broadcastTitle.trim(),
+          content: broadcastContent.trim(),
+          frequency: broadcastFrequency
+        })
+      });
+      setBroadcastSaved(true);
+      showNotification('تم حفظ إعدادات رسالة تسجيل الدخول بنجاح');
+      setTimeout(() => setBroadcastSaved(false), 2500);
+    } catch (err: any) {
+      alert(err.message || 'فشل حفظ إعدادات الرسالة');
+    } finally {
+      setSavingBroadcast(false);
+    }
+  };
+
+  const handleUpdateSuggestion = async (id: string, status?: string) => {
+    setUpdatingSugId(id);
+    try {
+      const sug = adminSuggestionsList.find(s => s.id === id);
+      const targetStatus = status || sug?.status || 'new';
+      const adminReply = repliesState[id] || '';
+
+      await apiRequest(`/admin/suggestions/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: targetStatus,
+          adminReply
+        })
+      });
+
+      showNotification('تم تحديث حالة الاقتراح وإشعار العضو بنجاح');
+      fetchAdminSuggestions();
+    } catch (err: any) {
+      alert(err.message || 'فشل تحديث الاقتراح');
+    } finally {
+      setUpdatingSugId(null);
+    }
+  };
+
+  const handleAwardCreatorBadge = async (sug: any) => {
+    if (!confirm(`هل أنت متأكد من رغبتك في إهداء وسام «المبدع» 💡 للمستخدم ${sug.author_username} تقديراً لاقتراحه: "${sug.title}"؟`)) {
+      return;
+    }
+    setUpdatingSugId(sug.id);
+    try {
+      await apiRequest(`/admin/suggestions/${sug.id}/award-creator`, {
+        method: 'POST'
+      });
+      showNotification(`تم إهداء وسام «المبدع» 💡 للمستخدم ${sug.author_username} وإرسال إشعار رسمي له!`);
+      fetchAdminSuggestions();
+    } catch (err: any) {
+      alert(err.message || 'فشل إهداء الشعار');
+    } finally {
+      setUpdatingSugId(null);
+    }
+  };
 
   const handleSaveRandomSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -892,6 +1055,17 @@ export const AdminPage: React.FC = () => {
           >
             البلاغات ({stats?.pendingReports || 0})
           </button>
+          {isAdmin && (
+            <button
+              onClick={() => setActiveTab('suggestions')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'suggestions' ? 'bg-neutral-800 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <Lightbulb className="w-3.5 h-3.5 text-yellow-400" />
+              <span>اقتراحات الأعضاء</span>
+            </button>
+          )}
           {isAdmin && (
             <button
               onClick={() => setActiveTab('settings')}
@@ -1642,44 +1816,456 @@ export const AdminPage: React.FC = () => {
 
       {/* 6. SETTINGS TAB */}
       {activeTab === 'settings' && isAdmin && (
-        <div className="max-w-xl p-6 rounded-3xl bg-[#0e1017] border border-neutral-800 space-y-5">
-          <h2 className="font-cairo font-bold text-base text-white flex items-center gap-2">
-            <Settings className="w-4 h-4 text-emerald-400" />
-            إعدادات النظام العامة والزوار
-          </h2>
+        <div className="space-y-6 max-w-4xl animate-in fade-in" dir="rtl">
+          {/* Card 1: Independent Room Minute Pricing Settings (Owner Only) */}
+          {isOwner && (
+            <div className="p-6 rounded-3xl bg-[#0e1017] border border-neutral-800 space-y-5 shadow-xl">
+              <div className="flex items-center justify-between border-b border-neutral-850 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-400">
+                    <Coins className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="font-cairo font-bold text-base text-white">
+                      تسعير دقيقة المشاركة في الرومات (صوتي وفيديو)
+                    </h2>
+                    <p className="text-xs text-neutral-400 font-tajawal">
+                      إعداد مستقل لسعر الدقيقة يخصم تلقائياً من محفظة المشارك بواسطة الخادم كل 60 ثانية.
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-950/80 text-teal-300 border border-teal-800/60 font-bold">
+                  خاص بالمالك
+                </span>
+              </div>
 
-          <form onSubmit={handleSaveSettings} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-neutral-300 mb-1.5 font-tajawal">
-                الحد الأقصى لرسائل الزوار (افتراضياً 500 رسالة)
-              </label>
-              <input
-                type="number"
-                min={50}
-                max={5000}
-                value={guestLimit}
-                onChange={(e) => setGuestLimit(Number(e.target.value))}
-                className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-sm"
-              />
-              <p className="text-[11px] text-neutral-500 mt-1 font-tajawal">
-                ينتهي حساب الزائر عند إرسال هذا العدد من الرسائل ويُطلب منه التسجيل مجاناً (18+).
-              </p>
+              <form onSubmit={handleSaveRoomPricing} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-2xl bg-[#07090e] border border-neutral-800 space-y-2">
+                    <label className="block text-xs font-bold text-teal-300 font-tajawal flex items-center gap-2">
+                      <span>🎙️</span>
+                      <span>سعر الدقيقة في الرومات الصوتية (كوينز)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000}
+                      value={roomAudioPrice}
+                      onChange={(e) => setRoomAudioPrice(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-750 focus:border-teal-500 text-white font-mono text-sm outline-none"
+                    />
+                    <p className="text-[11px] text-neutral-500 font-tajawal">
+                      يُخصم هذا السعر من كل عضو في الروم الصوتي بعد كل دقيقة مشاركة.
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-[#07090e] border border-neutral-800 space-y-2">
+                    <label className="block text-xs font-bold text-purple-300 font-tajawal flex items-center gap-2">
+                      <span>📹</span>
+                      <span>سعر الدقيقة في رومات الفيديو (كوينز)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000}
+                      value={roomVideoPrice}
+                      onChange={(e) => setRoomVideoPrice(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-750 focus:border-purple-500 text-white font-mono text-sm outline-none"
+                    />
+                    <p className="text-[11px] text-neutral-500 font-tajawal">
+                      يُخصم هذا السعر من كل عضو في روم الفيديو بعد كل دقيقة مشاركة.
+                    </p>
+                  </div>
+                </div>
+
+                {roomPricingSaved && (
+                  <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-300 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>تم حفظ أسعار الدقيقة للرومات الصوتية والفيديو بنجاح!</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={savingRoomPricing}
+                  className="w-full py-3 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-bold text-sm shadow-lg shadow-teal-600/20 cursor-pointer disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{savingRoomPricing ? 'جاري الحفظ...' : 'حفظ أسعار الرومات'}</span>
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Card 2: Post-Login Notice / Broadcast Settings (Owner Only) */}
+          {isOwner && (
+            <div className="p-6 rounded-3xl bg-[#0e1017] border border-neutral-800 space-y-5 shadow-xl">
+              <div className="flex items-center justify-between border-b border-neutral-850 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                    <Megaphone className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="font-cairo font-bold text-base text-white">
+                      نافذة الإعلان والرسالة بعد تسجيل الدخول
+                    </h2>
+                    <p className="text-xs text-neutral-400 font-tajawal">
+                      رسالة تنبيهية تظهر للمستخدمين بعد تسجيل الدخول بنجاح مع زر إغلاق آمن بدون منع الاستخدام.
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] px-2.5 py-1 rounded-full bg-amber-950/80 text-amber-300 border border-amber-800/60 font-bold">
+                  خاص بالمالك
+                </span>
+              </div>
+
+              <form onSubmit={handleSaveBroadcast} className="space-y-4">
+                {/* Active Toggle Switch */}
+                <div className="flex items-center justify-between p-4 rounded-2xl bg-[#07090e] border border-neutral-800">
+                  <div>
+                    <div className="text-xs font-bold text-white font-cairo">تفعيل الرسالة بعد تسجيل الدخول</div>
+                    <div className="text-[11px] text-neutral-400 font-tajawal">
+                      عند التفعيل، ستظهر النافذة للمستخدمين المؤهلين بعد تسجيل الدخول فوراً.
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={broadcastEnabled}
+                      onChange={(e) => setBroadcastEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                  </label>
+                </div>
+
+                {/* Title */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1.5 font-tajawal">
+                    عنوان الرسالة
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={100}
+                    value={broadcastTitle}
+                    onChange={(e) => setBroadcastTitle(e.target.value)}
+                    placeholder="مثال: أهلاً بك في تحديث فضفضه الجديد ✨"
+                    className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 focus:border-amber-500 text-white text-sm outline-none font-tajawal"
+                  />
+                </div>
+
+                {/* Content */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1.5 font-tajawal">
+                    محتوى الرسالة (يتم عرضه بأمان كنص خالص يدعم الأسطر المتعددة)
+                  </label>
+                  <textarea
+                    rows={4}
+                    required
+                    maxLength={2000}
+                    value={broadcastContent}
+                    onChange={(e) => setBroadcastContent(e.target.value)}
+                    placeholder="اكتب التنبيه أو الترحيب أو القواعد الجديدة هنا..."
+                    className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 focus:border-amber-500 text-white text-xs sm:text-sm outline-none font-tajawal resize-none leading-relaxed"
+                  />
+                </div>
+
+                {/* Frequency selection */}
+                <div className="p-4 rounded-2xl bg-[#07090e] border border-neutral-800 space-y-2.5">
+                  <label className="block text-xs font-bold text-neutral-200 font-tajawal">
+                    تكرار ظهور النافذة للمستخدم:
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className={`p-3 rounded-xl border cursor-pointer flex items-center gap-2.5 transition-all ${
+                      broadcastFrequency === 'once_per_version'
+                        ? 'border-amber-500 bg-amber-950/20 text-white'
+                        : 'border-neutral-800 bg-neutral-900/50 text-neutral-400'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="broadcast_freq"
+                        value="once_per_version"
+                        checked={broadcastFrequency === 'once_per_version'}
+                        onChange={() => setBroadcastFrequency('once_per_version')}
+                        className="text-amber-500"
+                      />
+                      <div className="text-xs font-tajawal text-right">
+                        <div className="font-bold text-white">مرة واحدة لكل مستخدم</div>
+                        <div className="text-[10px] text-neutral-400">تظهر مرة واحدة ولا تتكرر إلا عند تعديل المحتوى</div>
+                      </div>
+                    </label>
+
+                    <label className={`p-3 rounded-xl border cursor-pointer flex items-center gap-2.5 transition-all ${
+                      broadcastFrequency === 'always'
+                        ? 'border-amber-500 bg-amber-950/20 text-white'
+                        : 'border-neutral-800 bg-neutral-900/50 text-neutral-400'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="broadcast_freq"
+                        value="always"
+                        checked={broadcastFrequency === 'always'}
+                        onChange={() => setBroadcastFrequency('always')}
+                        className="text-amber-500"
+                      />
+                      <div className="text-xs font-tajawal text-right">
+                        <div className="font-bold text-white">عند كل تسجيل دخول</div>
+                        <div className="text-[10px] text-neutral-400">تظهر في كل جلسة تسجيل دخول جديدة للمستخدم</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {broadcastSaved && (
+                  <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-300 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>تم حفظ إعدادات رسالة تسجيل الدخول بنجاح!</span>
+                  </div>
+                )}
+
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setBroadcastPreviewOpen(true)}
+                    className="flex-1 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors border border-amber-500/30"
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>معاينة شكل النافذة الآن</span>
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={savingBroadcast}
+                    className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-neutral-950 font-bold text-xs shadow-lg shadow-amber-500/20 cursor-pointer disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Save className="w-4 h-4" />
+                    <span>{savingBroadcast ? 'جاري الحفظ...' : 'حفظ ونشر الرسالة'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Card 3: General System Settings & Guests Limit */}
+          <div className="p-6 rounded-3xl bg-[#0e1017] border border-neutral-800 space-y-4 shadow-xl">
+            <h2 className="font-cairo font-bold text-base text-white flex items-center gap-2">
+              <Settings className="w-4 h-4 text-emerald-400" />
+              إعدادات النظام العامة والزوار
+            </h2>
+
+            <form onSubmit={handleSaveSettings} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1.5 font-tajawal">
+                  الحد الأقصى لرسائل الزوار (افتراضياً 500 رسالة)
+                </label>
+                <input
+                  type="number"
+                  min={50}
+                  max={5000}
+                  value={guestLimit}
+                  onChange={(e) => setGuestLimit(Number(e.target.value))}
+                  className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-sm"
+                />
+                <p className="text-[11px] text-neutral-500 mt-1 font-tajawal">
+                  ينتهي حساب الزائر عند إرسال هذا العدد من الرسائل ويُطلب منه التسجيل مجاناً (18+).
+                </p>
+              </div>
+
+              {settingsSaved && (
+                <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>تم حفظ إعدادات النظام بنجاح!</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/20 cursor-pointer"
+              >
+                حفظ إعدادات المنصة
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 6.5 SUGGESTIONS MANAGEMENT TAB (Owner & Admin) */}
+      {activeTab === 'suggestions' && isAdmin && (
+        <div className="space-y-6 animate-in fade-in" dir="rtl">
+          {/* Header */}
+          <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-neutral-900 via-neutral-900/90 to-amber-950/40 border border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                  <Lightbulb className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="font-cairo font-bold text-lg text-white">
+                    إدارة مقترحات الأعضاء وشعار «المبدع»
+                  </h2>
+                  <p className="text-xs text-neutral-400 font-tajawal">
+                    مراجعة أفكار الأعضاء، تغيير الحالات، الرد المباشر، وإهداء وسام «المبدع» 💡 لأصحاب المقترحات المميزة.
+                  </p>
+                </div>
+              </div>
             </div>
 
-            {settingsSaved && (
-              <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-300 text-xs flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>تم حفظ إعدادات النظام بنجاح!</span>
-              </div>
-            )}
-
             <button
-              type="submit"
-              className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/20 cursor-pointer"
+              onClick={fetchAdminSuggestions}
+              className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold flex items-center gap-2 cursor-pointer self-start sm:self-auto"
             >
-              حفظ إعدادات المنصة
+              <RefreshCw className={`w-3.5 h-3.5 ${suggestionsLoading ? 'animate-spin' : ''}`} />
+              <span>تحديث القائمة</span>
             </button>
-          </form>
+          </div>
+
+          {/* Suggestions List */}
+          {suggestionsLoading ? (
+            <div className="p-8 text-center text-neutral-400 text-xs">جاري تحميل الاقتراحات...</div>
+          ) : adminSuggestionsList.length === 0 ? (
+            <div className="p-12 text-center rounded-3xl bg-neutral-900/40 border border-neutral-800 space-y-3 max-w-md mx-auto">
+              <Lightbulb className="w-10 h-10 text-amber-400 mx-auto opacity-70" />
+              <h3 className="font-cairo font-bold text-white text-sm">لا توجد اقتراحات مرسلة حتى الآن</h3>
+              <p className="text-xs text-neutral-400 font-tajawal">
+                عندما يرسل الأعضاء أفكاراً ومقترحات ستظهر هنا مع إمكانية تحديث الحالة والرد وإهداء الأوسمة.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {adminSuggestionsList.map((sug) => {
+                const hasCreator = Boolean(sug.has_creator_badge > 0);
+                const isUpdating = updatingSugId === sug.id;
+
+                return (
+                  <div
+                    key={sug.id}
+                    className="p-5 rounded-3xl bg-[#0e1017] border border-neutral-800 hover:border-neutral-750 transition-all space-y-4 shadow-lg"
+                  >
+                    {/* Top Row: Author & Submission info */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-850 pb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-neutral-800 border border-neutral-700 flex items-center justify-center font-bold text-white text-xs overflow-hidden">
+                          {sug.author_avatar ? (
+                            <img src={sug.author_avatar} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            sug.author_username?.slice(0, 2).toUpperCase()
+                          )}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-cairo font-bold text-sm text-white">
+                              {sug.author_username}
+                            </span>
+                            {hasCreator && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-yellow-300 bg-yellow-950/80 border border-yellow-600/60 px-2 py-0.5 rounded-full shadow-sm">
+                                <span>💡</span>
+                                <span>يحمل وسام المبدع</span>
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-neutral-400 font-tajawal">
+                            تاريخ الإرسال: {new Date(sug.created_at).toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Current Status Badge */}
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold border font-tajawal ${
+                          sug.status === 'new'
+                            ? 'bg-blue-950/80 text-blue-300 border-blue-800/60'
+                            : sug.status === 'under_review'
+                            ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
+                            : sug.status === 'accepted'
+                            ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
+                            : sug.status === 'implemented'
+                            ? 'bg-purple-950/80 text-purple-200 border-purple-700/60'
+                            : 'bg-rose-950/80 text-rose-300 border-rose-800/60'
+                        }`}>
+                          {sug.status === 'new' ? 'جديد' :
+                           sug.status === 'under_review' ? 'قيد المراجعة' :
+                           sug.status === 'accepted' ? 'مقبول' :
+                           sug.status === 'implemented' ? 'تم التنفيذ 🚀' : 'مرفوض'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Content */}
+                    <div className="space-y-1.5">
+                      <h3 className="font-cairo font-bold text-base text-white">{sug.title}</h3>
+                      <p className="text-xs sm:text-sm text-neutral-300 font-tajawal leading-relaxed whitespace-pre-wrap bg-[#07090e] p-3.5 rounded-2xl border border-neutral-850">
+                        {sug.description}
+                      </p>
+                    </div>
+
+                    {/* Moderation Controls: Status selector + Reply */}
+                    <div className="p-4 rounded-2xl bg-neutral-900/50 border border-neutral-800 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs font-bold text-neutral-300 font-tajawal shrink-0">
+                            تغيير الحالة:
+                          </label>
+                          <select
+                            value={sug.status}
+                            onChange={(e) => handleUpdateSuggestion(sug.id, e.target.value)}
+                            disabled={isUpdating}
+                            className="px-3 py-1.5 rounded-xl bg-neutral-900 border border-neutral-750 text-white text-xs font-tajawal outline-none cursor-pointer"
+                          >
+                            <option value="new">جديد</option>
+                            <option value="under_review">قيد المراجعة</option>
+                            <option value="accepted">مقبول</option>
+                            <option value="implemented">تم التنفيذ</option>
+                            <option value="rejected">مرفوض</option>
+                          </select>
+                        </div>
+
+                        {/* Award Creator Badge (Owner Only) */}
+                        {isOwner && !hasCreator && (
+                          <button
+                            type="button"
+                            onClick={() => handleAwardCreatorBadge(sug)}
+                            disabled={isUpdating}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 text-neutral-950 font-black text-xs font-cairo flex items-center gap-1.5 shadow-lg shadow-yellow-500/20 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+                          >
+                            <span>💡</span>
+                            <span>إهداء شعار «المبدع»</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Admin Reply Input */}
+                      <div className="space-y-1.5 pt-1">
+                        <label className="block text-xs font-bold text-neutral-300 font-tajawal">
+                          الرد على صاحب الاقتراح (سيصل إليه إشعار رسمي فوري):
+                        </label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="اكتب رد الإدارة على هذه الفكرة..."
+                            value={repliesState[sug.id] ?? (sug.admin_reply || '')}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setRepliesState(prev => ({ ...prev, [sug.id]: val }));
+                            }}
+                            className="flex-1 px-3.5 py-2 rounded-xl bg-neutral-900 border border-neutral-750 text-white text-xs font-tajawal outline-none focus:border-amber-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateSuggestion(sug.id)}
+                            disabled={isUpdating}
+                            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs font-cairo cursor-pointer shrink-0 disabled:opacity-50 transition-colors"
+                          >
+                            {isUpdating ? 'جاري الإرسال...' : 'إرسال الرد'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -3429,6 +4015,23 @@ export const AdminPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Post-Login Broadcast Message Live Preview Modal */}
+      {broadcastPreviewOpen && (
+        <LoginNoticeModal
+          notice={{
+            id: 'preview',
+            title: broadcastTitle,
+            content: broadcastContent,
+            enabled: broadcastEnabled,
+            frequency: broadcastFrequency,
+            version: broadcastVersion,
+            updated_at: new Date().toISOString()
+          }}
+          onClose={() => setBroadcastPreviewOpen(false)}
+          isPreview={true}
+        />
       )}
     </div>
   );

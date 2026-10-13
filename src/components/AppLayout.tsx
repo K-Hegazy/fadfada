@@ -23,7 +23,8 @@ import {
   Bot,
   Calendar,
   Newspaper,
-  Shuffle
+  Shuffle,
+  Lightbulb
 } from 'lucide-react';
 import { OwnerBadge, isUserOwner } from './OwnerBadge';
 
@@ -83,6 +84,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     {
       title: 'المميزات والمكافآت',
       items: [
+        { key: 'suggestions', label: 'اقتراحات الموقع', icon: Lightbulb },
         { key: 'shop', label: 'متجر الشارات', icon: ShoppingBag },
         { key: 'missions', label: 'المهام اليومية', icon: Target, memberOnly: true },
         { key: 'levels', label: 'المستويات والشرف', icon: Trophy, memberOnly: true },

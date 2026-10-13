@@ -429,6 +429,13 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
                 </span>
               )}
 
+              {item.hasCreatorBadge && (
+                <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-yellow-300 bg-yellow-950/80 border border-yellow-600/60 px-1.5 py-0.2 rounded shadow-sm shrink-0" title="شعار «المبدع» التقديري">
+                  <span>💡</span>
+                  <span>المبدع</span>
+                </span>
+              )}
+
               {item.equippedBadge && (
                 <span className="text-xs shrink-0" title="شارة خاصة">
                   {item.equippedBadge}

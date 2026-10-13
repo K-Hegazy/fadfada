@@ -356,11 +356,18 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         )}
       </div>
 
-      {/* 2. Top Cover Area (Banner) */}
-      <div className={`h-32 sm:h-36 shrink-0 relative bg-gradient-to-b ${coverGradientClass} overflow-hidden border-b border-neutral-850/80`}>
-        {/* Subtle Decorative Pattern */}
-        <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#ffffff_1px,transparent_1px)] [background-size:16px_16px]" />
-        <div className="absolute -bottom-1 left-0 right-0 h-10 bg-gradient-to-t from-[#080b11] to-transparent pointer-events-none" />
+      {/* 1. الغلاف (Cover Banner) */}
+      <div className={`h-32 sm:h-38 shrink-0 relative ${profile.cover_url || profile.coverUrl ? 'bg-black' : `bg-gradient-to-b ${coverGradientClass}`} overflow-hidden border-b border-neutral-850/80`}>
+        {profile.cover_url || profile.coverUrl ? (
+          <img
+            src={profile.cover_url || profile.coverUrl}
+            alt="غلاف الملف الشخصي"
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#ffffff_1px,transparent_1px)] [background-size:16px_16px]" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-[#080b11] via-black/20 to-black/40 pointer-events-none" />
       </div>
 
       {/* 3. Independent Scrollable Profile Body - ONLY THIS CONTAINER SCROLLS */}
@@ -531,9 +538,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           )}
         </div>
 
-        {/* 5. Organized Sections */}
+        {/* 5. Organized Sections strictly following user requested sequence */}
 
-        {/* Section 1: نبذة عن المستخدم (Bio) */}
+        {/* 3. النبذة التعريفية (Bio) */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs font-bold text-neutral-400 font-tajawal">
             <User className="w-3.5 h-3.5 text-emerald-400" />
@@ -548,37 +555,167 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
         </div>
 
-        {/* Section 2: أهم الإحصائيات (Key Stats) */}
+        {/* 4. إحصائيات الأصدقاء والمتابعين (Friends & Followers Stats) */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs font-bold text-neutral-400 font-tajawal">
             <Flame className="w-3.5 h-3.5 text-amber-400" />
-            <span>أهم الإحصائيات</span>
+            <span>إحصائيات الأصدقاء والمتابعين</span>
           </div>
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3">
             <div className="p-3 rounded-2xl bg-[#0e121b]/80 border border-neutral-800/80 text-center space-y-0.5">
               <div className="text-lg sm:text-xl font-bold font-cairo text-white tabular-nums">
                 {profile.stats?.friendsCount ?? 0}
               </div>
-              <div className="text-[11px] text-neutral-400 font-tajawal">الأصدقاء</div>
+              <div className="text-[11px] text-neutral-400 font-tajawal">الأصدقاء المقربون</div>
             </div>
 
             <div className="p-3 rounded-2xl bg-[#0e121b]/80 border border-neutral-800/80 text-center space-y-0.5">
               <div className="text-lg sm:text-xl font-bold font-cairo text-white tabular-nums">
                 {profile.stats?.followersCount ?? 0}
               </div>
-              <div className="text-[11px] text-neutral-400 font-tajawal">المتابعون</div>
-            </div>
-
-            <div className="p-3 rounded-2xl bg-[#0e121b]/80 border border-neutral-800/80 text-center space-y-0.5">
-              <div className="text-lg sm:text-xl font-bold font-cairo text-white tabular-nums">
-                {profile.stats?.giftsReceivedCount ?? 0}
-              </div>
-              <div className="text-[11px] text-neutral-400 font-tajawal">الهدايا</div>
+              <div className="text-[11px] text-neutral-400 font-tajawal">المتابعون والمهتمون</div>
             </div>
           </div>
         </div>
 
-        {/* Section 3: المعلومات الأساسية (Personal Info & Account Details) */}
+        {/* 5. الهدايا (Gifts Received) */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs font-bold font-tajawal">
+            <div className="flex items-center gap-2 text-neutral-400">
+              <Gift className="w-3.5 h-3.5 text-amber-400" />
+              <span>صندوق الهدايا ({profile.stats?.giftsReceivedCount ?? profile.giftsReceived?.length ?? 0})</span>
+            </div>
+            {!isMe && (
+              <button
+                type="button"
+                onClick={() => onOpenGifts(userId)}
+                className="text-amber-400 hover:text-amber-300 text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <span>إهداء الآن</span>
+                <span>🎁</span>
+              </button>
+            )}
+          </div>
+
+          {profile.giftsReceived && profile.giftsReceived.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {profile.giftsReceived.map((gift: any, idx: number) => (
+                <div
+                  key={idx}
+                  className="p-2.5 rounded-2xl bg-[#0e121b]/80 border border-amber-900/30 flex items-center justify-between gap-2 shadow-sm"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-2xl shrink-0">{gift.icon || '🎁'}</span>
+                    <div className="min-w-0 text-right">
+                      <div className="text-xs font-bold text-white truncate font-cairo">
+                        {gift.arabic_name || gift.name}
+                      </div>
+                      <div className="text-[10px] text-amber-300/80 font-mono">
+                        {gift.price_coins ? `${gift.price_coins} كوينز` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold font-mono border border-amber-500/30">
+                    ×{gift.count}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 rounded-2xl bg-[#0e121b]/50 border border-neutral-850 text-center space-y-1.5">
+              <div className="text-2xl">🎁</div>
+              <p className="text-xs text-neutral-400 font-tajawal">
+                {isMe ? 'لم تتلقَ هدايا بعد. شارك في المجالس وتفاعل مع أصدقائك!' : 'لم يتلقَ هذا المستخدم هدايا بعد. كن أول من يهديه!'}
+              </p>
+              {!isMe && (
+                <button
+                  type="button"
+                  onClick={() => onOpenGifts(userId)}
+                  className="mt-1 px-4 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs font-cairo cursor-pointer transition-colors"
+                >
+                  إرسال هدية تسعده
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 6. الشعارات (Badges) */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-neutral-400 font-tajawal">
+            <Award className="w-3.5 h-3.5 text-amber-400" />
+            <span>الشعارات والأوسمة التقديرية</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* Exclusive Creator Badge if awarded */}
+            {profile.hasCreatorBadge && (
+              <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-950/60 to-yellow-950/40 border-2 border-yellow-500/70 flex items-center gap-3 shadow-lg shadow-yellow-500/10">
+                <div className="w-9 h-9 rounded-xl bg-yellow-500/20 text-yellow-300 flex items-center justify-center text-xl shrink-0 border border-yellow-500/50">
+                  💡
+                </div>
+                <div className="text-right min-w-0">
+                  <div className="text-xs font-black text-yellow-300 font-cairo flex items-center gap-1.5">
+                    <span>شعار «المبدع»</span>
+                    <Sparkles className="w-3 h-3 text-yellow-400 animate-pulse" />
+                  </div>
+                  <div className="text-[10px] text-neutral-300 font-tajawal leading-tight">
+                    وسام شرفي فخري مهدى من مالك فضفضه لأصحاب الأفكار المميزة
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Owner Badge */}
+            {isOwner && (
+              <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-950/60 to-neutral-900 border border-amber-600/60 flex items-center gap-3 shadow-sm">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center text-xl shrink-0 border border-amber-500/40">
+                  👑
+                </div>
+                <div className="text-right min-w-0">
+                  <div className="text-xs font-bold text-amber-300 font-cairo">مالك المنصة</div>
+                  <div className="text-[10px] text-neutral-400 font-tajawal">مؤسس وإدارة فضفضه العليا</div>
+                </div>
+              </div>
+            )}
+
+            {/* VIP Badge */}
+            {profile.vip_level && profile.vip_level !== 'none' && (
+              <div className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/50 to-neutral-900 border border-purple-600/50 flex items-center gap-3 shadow-sm">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-300 flex items-center justify-center text-xl shrink-0 border border-purple-500/40">
+                  ⭐
+                </div>
+                <div className="text-right min-w-0">
+                  <div className="text-xs font-bold text-purple-300 font-cairo">عضوية VIP {profile.vip_level?.toUpperCase()}</div>
+                  <div className="text-[10px] text-neutral-400 font-tajawal">عضو مميز وموثق في المنصة</div>
+                </div>
+              </div>
+            )}
+
+            {/* Other Unlocked Badges */}
+            {profile.badges && profile.badges.filter((b: any) => b.key !== 'creator').map((badge: any, bIdx: number) => (
+              <div
+                key={bIdx}
+                className="p-3 rounded-2xl bg-[#0e121b]/80 border border-neutral-800 flex items-center gap-3 shadow-sm"
+              >
+                <span className="text-xl shrink-0">{badge.icon || '🏅'}</span>
+                <div className="text-right min-w-0">
+                  <div className="text-xs font-bold text-white truncate font-cairo">{badge.name}</div>
+                  <div className="text-[10px] text-neutral-400 truncate font-tajawal">{badge.description || 'شارة تميز في فضفضه'}</div>
+                </div>
+              </div>
+            ))}
+
+            {/* Empty Badges State */}
+            {!profile.hasCreatorBadge && !isOwner && (!profile.vip_level || profile.vip_level === 'none') && (!profile.badges || profile.badges.length === 0) && (
+              <div className="col-span-full p-3.5 rounded-2xl bg-[#0e121b]/50 border border-neutral-850 text-neutral-400 text-xs text-center font-tajawal">
+                لم يحصل المستخدم على شعارات خاصة بعد.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 7. بيانات الحساب (Account Info) */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs font-bold text-neutral-400 font-tajawal">
             <Globe className="w-3.5 h-3.5 text-teal-400" />
@@ -586,6 +723,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
           <div className="bg-[#0e121b]/80 border border-neutral-800/80 rounded-2xl p-3.5 divide-y divide-neutral-850/80 space-y-2.5 text-xs font-tajawal shadow-sm">
             <div className="flex items-center justify-between pt-0.5">
+              <span className="text-neutral-400">معرف الحساب (ID)</span>
+              <span className="text-neutral-300 font-mono text-[11px] bg-black/40 px-2 py-0.5 rounded border border-white/5">
+                {profile.id ? profile.id.slice(0, 12) : 'user'}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between pt-2.5">
               <span className="text-neutral-400">الدولة والمنطقة</span>
               <span className="text-white font-medium flex items-center gap-1.5">
                 <span>{countryFlag}</span>
@@ -623,7 +767,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
         </div>
 
-        {/* Section 4: الاهتمامات (Interests) */}
+        {/* 8. الاهتمامات والهوايات (Interests & Hobbies) */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs font-bold text-neutral-400 font-tajawal">
             <Layers className="w-3.5 h-3.5 text-emerald-400" />
@@ -646,30 +790,6 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
           )}
         </div>
-
-        {/* Section 5: الشارات والإنجازات (Badges & Achievements) */}
-        {profile.achievements && profile.achievements.length > 0 && (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs font-bold text-neutral-400 font-tajawal">
-              <Award className="w-3.5 h-3.5 text-amber-400" />
-              <span>الإنجازات المكتسبة ({profile.achievements.length})</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {profile.achievements.map((ach: any, idx: number) => (
-                <div
-                  key={idx}
-                  className="p-2.5 rounded-2xl bg-[#0e121b]/80 border border-neutral-800 flex items-center gap-2.5 shadow-sm"
-                >
-                  <span className="text-xl shrink-0">{ach.icon || '🏆'}</span>
-                  <div className="text-right min-w-0">
-                    <div className="text-xs font-bold text-neutral-200 truncate">{ach.title}</div>
-                    <div className="text-[10px] text-neutral-400 truncate">{ach.description}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Report Drawer/Modal */}

@@ -87,6 +87,7 @@ export interface OnlineUserItem {
   isPinned?: boolean;
   equippedBadge?: string | null;
   equippedFrame?: string | null;
+  hasCreatorBadge?: boolean;
   isGuest?: boolean;
 }
 
@@ -209,12 +210,17 @@ export interface Room {
   name: string;
   description?: string;
   category: string;
+  room_type?: 'audio' | 'video';
+  roomType?: 'audio' | 'video';
+  cost_per_minute?: number;
+  costPerMinute?: number;
   is_private: number;
   rules?: string;
   image_url?: string;
   created_by: string;
   creator_username?: string;
   member_count?: number;
+  active_participants_count?: number;
   created_at: string;
 }
 
@@ -243,10 +249,38 @@ export interface Story {
   gender: Gender;
   content: string;
   media_url?: string;
-  type: 'text' | 'image';
+  type: 'text' | 'image' | 'video';
   view_count: number;
   created_at: string;
   expires_at: string;
+}
+
+export interface SiteSuggestion {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string;
+  status: 'new' | 'under_review' | 'accepted' | 'implemented' | 'rejected';
+  admin_reply?: string;
+  admin_reply_at?: string;
+  created_at: string;
+  updated_at?: string;
+  author_username?: string;
+  author_email?: string;
+  author_avatar?: string;
+  author_gender?: string;
+  author_role?: string;
+  has_creator_badge?: number | boolean;
+}
+
+export interface LoginNotice {
+  id?: string;
+  enabled: boolean;
+  title: string;
+  content: string;
+  frequency: 'always' | 'once_per_version';
+  version: string;
+  updated_at?: string;
 }
 
 export interface Mission {

@@ -538,7 +538,92 @@ const heartbeatInterval = setInterval(() => {
 
 wss.on('close', () => {
   clearInterval(heartbeatInterval);
+  clearInterval(roomBillingInterval);
 });
+
+// Room Pay-Per-Minute Billing Loop (Processed Strictly Server-Side)
+const roomBillingInterval = setInterval(async () => {
+  try {
+    const db = await getDb();
+    const activeSessions = queryAll(
+      db,
+      `SELECT ras.*, u.coins, r.name as room_name, r.cost_per_minute as current_room_price
+       FROM room_active_sessions ras
+       JOIN users u ON ras.user_id = u.id
+       JOIN rooms r ON ras.room_id = r.id
+       WHERE ras.status = 'active' AND ras.cost_per_minute > 0`
+    );
+
+    const now = Date.now();
+    for (const session of activeSessions) {
+      const lastBilled = new Date(session.last_billed_at).getTime();
+      const elapsedSeconds = Math.floor((now - lastBilled) / 1000);
+
+      // Bill every 60 seconds of participation
+      if (elapsedSeconds >= 60) {
+        const cost = session.cost_per_minute;
+        if (session.coins >= cost) {
+          // Sufficient balance: Deduct coins atomically
+          const before = session.coins;
+          const after = before - cost;
+          db.run("UPDATE users SET coins = coins - ? WHERE id = ?", [cost, session.user_id]);
+
+          const txId = 'tx_room_' + Math.random().toString(36).substring(2, 9);
+          db.run(
+            `INSERT INTO wallet_transactions (
+              id, user_id, amount, type, description, balance_before, balance_after
+            ) VALUES (?, ?, ?, 'room_usage', ?, ?, ?)`,
+            [
+              txId,
+              session.user_id,
+              -cost,
+              `رسوم المشاركة في روم (${session.room_name}): دقيقة واحدة`,
+              before,
+              after
+            ]
+          );
+
+          db.run(
+            `UPDATE room_active_sessions
+             SET last_billed_at = CURRENT_TIMESTAMP,
+                 total_minutes = total_minutes + 1,
+                 total_coins_spent = total_coins_spent + ?
+             WHERE id = ?`,
+            [cost, session.id]
+          );
+
+          sendToUser(session.user_id, {
+            type: 'room:billed',
+            roomId: session.room_id,
+            cost,
+            remainingCoins: after,
+            totalMinutes: session.total_minutes + 1,
+            totalSpent: session.total_coins_spent + cost
+          });
+        } else {
+          // Insufficient balance: Terminate session, prevent negative balance
+          db.run("UPDATE room_active_sessions SET status = 'depleted' WHERE id = ?", [session.id]);
+          db.run("DELETE FROM active_audio_speakers WHERE room_id = ? AND user_id = ?", [session.room_id, session.user_id]);
+
+          sendToUser(session.user_id, {
+            type: 'room:balance_depleted',
+            roomId: session.room_id,
+            message: 'تم إنهاء مشاركتك في الروم لنفاد رصيد الكوينز في محفظتك.'
+          });
+
+          broadcastToRoom(db, session.room_id, {
+            type: 'room:user_left',
+            roomId: session.room_id,
+            userId: session.user_id
+          }, session.user_id);
+        }
+      }
+    }
+    saveDb();
+  } catch (err) {
+    console.error('Room billing ticker error:', err);
+  }
+}, 15000);
 
 // Random Chat Matchmaking Waiters Queue
 export interface RandomChatWaiter {
@@ -703,6 +788,28 @@ function touchUserActivity(db: any, userId: string) {
             roomId: msg.roomId
           });
         }
+      } else if (msg.type === 'room:webrtc_signal') {
+        if (msg.targetUserId) {
+          sendToUser(msg.targetUserId, {
+            type: 'room:webrtc_signal',
+            fromUserId: user.userId,
+            fromUsername: user.username,
+            signal: msg.signal,
+            roomId: msg.roomId,
+            streamType: msg.streamType || 'video'
+          });
+        }
+      } else if (msg.type === 'room:media_state_change') {
+        if (msg.roomId) {
+          broadcastToRoom(db, msg.roomId, {
+            type: 'room:media_state_change',
+            userId: user.userId,
+            isMuted: !!msg.isMuted,
+            isCameraOff: !!msg.isCameraOff,
+            isSpeaking: !!msg.isSpeaking,
+            roomId: msg.roomId
+          }, user.userId);
+        }
       } else if (msg.type === 'game:tod_join') {
         const userProfile = queryOne(db, "SELECT username, avatar_url, gender FROM users WHERE id = ?", [user.userId]);
         todMultiplayerPlayers.set(user.userId, {
@@ -832,6 +939,7 @@ function touchUserActivity(db: any, userId: string) {
     randomChatWaiters.delete(user.userId);
     // Remove user from any audio rooms on disconnect
     db.run("DELETE FROM active_audio_speakers WHERE user_id = ?", [user.userId]);
+    db.run("UPDATE room_active_sessions SET status = 'ended' WHERE user_id = ? AND status = 'active'", [user.userId]);
 
     // Remove user from multiplayer Truth or Dare session
     if (todMultiplayerPlayers.has(user.userId)) {
@@ -1749,6 +1857,18 @@ app.get('/api/users/online', requireAuth, async (req: Request, res: Response) =>
           }
         }
       }
+      const creatorRows = queryAll(
+        db,
+        `SELECT user_id FROM user_badges WHERE user_id IN (${placeholders}) AND badge_key = 'creator'`,
+        userIds
+      );
+      const creatorSet = new Set(creatorRows.map(c => c.user_id));
+
+      for (const uid of userIds) {
+        if (creatorSet.has(uid) && !badgesMap[uid]) {
+          badgesMap[uid] = '💡';
+        }
+      }
     }
 
     const onlineUsers = rows.map(u => ({
@@ -1765,6 +1885,7 @@ app.get('/api/users/online', requireAuth, async (req: Request, res: Response) =>
       vipLevel: u.is_guest === 1 ? 'none' : u.vip_level,
       isGuest: u.is_guest === 1,
       isPinned: u.is_pinned === 1,
+      hasCreatorBadge: !!queryOne(db, "SELECT id FROM user_badges WHERE user_id = ? AND badge_key = 'creator'", [u.id]),
       equippedBadge: u.is_guest === 1 ? null : (badgesMap[u.id] || null),
       equippedFrame: u.is_guest === 1 ? null : (framesMap[u.id] || null),
       isOnline: u.privacy_online_status === 'nobody' ? false : (u.is_online === 1 || isUserOnline(u.id)),
@@ -1812,7 +1933,7 @@ app.get(['/api/users/:id/profile', '/api/users/:id'], requireAuth, async (req: R
 
     const user = queryOne(
       db,
-      `SELECT id, username, role, gender, country, bio, avatar_url, level, xp, streak,
+      `SELECT id, username, role, gender, country, bio, avatar_url, cover_url, level, xp, streak,
               vip_level, created_at, is_guest, privacy_messages, privacy_friend_requests,
               privacy_story_visibility, privacy_profile_visibility, privacy_online_status, privacy_last_seen
        FROM users WHERE id = ? AND is_banned = 0`,
@@ -1956,15 +2077,58 @@ app.get(['/api/users/:id/profile', '/api/users/:id'], requireAuth, async (req: R
     const showOnline = user.privacy_online_status !== 'nobody';
     const showBio = user.privacy_profile_visibility !== 'friends' || isFriend || targetId === session.userId;
 
+    // Fetch received gifts list
+    const giftsReceived = queryAll(
+      db,
+      `SELECT g.id, g.arabic_name, g.name, g.icon, g.price_coins, COUNT(gt.id) as count
+       FROM gift_transactions gt
+       JOIN gifts g ON gt.gift_id = g.id
+       WHERE gt.receiver_id = ?
+       GROUP BY g.id, g.arabic_name, g.name, g.icon, g.price_coins
+       ORDER BY count DESC`,
+      [targetId]
+    );
+
+    // Fetch user badges (including honorary 'creator' badge)
+    const userBadgesList = queryAll(
+      db,
+      `SELECT badge_key as key, badge_name as name, badge_icon as icon, badge_description as description, awarded_at as awardedAt
+       FROM user_badges WHERE user_id = ?`,
+      [targetId]
+    );
+
+    // Also include owned shop badges
+    const shopBadges = queryAll(
+      db,
+      `SELECT si.id as key, si.name, si.icon, si.description, ui.purchased_at as awardedAt
+       FROM user_inventory ui
+       JOIN shop_items si ON ui.item_id = si.id
+       WHERE ui.user_id = ? AND si.type = 'badge'
+         AND (ui.expires_at IS NULL OR ui.expires_at > CURRENT_TIMESTAMP)`,
+      [targetId]
+    );
+
+    const allBadges = [...userBadgesList];
+    for (const sb of shopBadges) {
+      if (!allBadges.some(b => b.key === sb.key || b.name === sb.name)) {
+        allBadges.push(sb);
+      }
+    }
+
+    const hasCreatorBadge = allBadges.some(b => b.key === 'creator');
+
     const userPayload = {
       ...user,
       isOwner: user.role === 'owner' || user.username?.toLowerCase() === 'hegazy',
       bio: showBio ? user.bio : '',
       isOnline: showOnline ? isUserOnline(targetId) : false,
-      equippedBadge: user.is_guest === 1 ? null : (invBadge ? (invBadge.icon || invBadge.name) : null),
+      equippedBadge: user.is_guest === 1 ? null : (invBadge ? (invBadge.icon || invBadge.name) : (hasCreatorBadge ? '💡' : null)),
       equippedFrame: user.is_guest === 1 ? null : equippedFrameStyle,
       interests,
       achievements,
+      giftsReceived,
+      badges: allBadges,
+      hasCreatorBadge,
       stats: {
         friendsCount,
         followersCount,
@@ -3774,15 +3938,76 @@ app.get('/api/rooms', requireAuth, async (req: Request, res: Response) => {
     const rows = queryAll(
       db,
       `SELECT r.*, u.username as creator_username,
-              (SELECT COUNT(*) FROM room_members WHERE room_id = r.id) as member_count
+              (SELECT COUNT(*) FROM room_members WHERE room_id = r.id) as member_count,
+              (SELECT COUNT(*) FROM room_active_sessions WHERE room_id = r.id AND status = 'active') as active_participants_count
        FROM rooms r
        JOIN users u ON r.created_by = u.id
        ORDER BY r.created_at DESC`
     );
 
-    return res.json({ rooms: rows });
+    const audioPriceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'room_audio_cost_per_minute'");
+    const videoPriceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'room_video_cost_per_minute'");
+    const audioCostPerMinute = parseInt(audioPriceRow?.value || '2', 10);
+    const videoCostPerMinute = parseInt(videoPriceRow?.value || '5', 10);
+
+    return res.json({
+      rooms: rows.map(r => ({
+        ...r,
+        roomType: r.room_type || 'audio',
+        costPerMinute: r.cost_per_minute ?? (r.room_type === 'video' ? videoCostPerMinute : audioCostPerMinute)
+      })),
+      pricing: {
+        audioCostPerMinute,
+        videoCostPerMinute
+      }
+    });
   } catch (error) {
     return res.status(500).json({ error: 'خطأ في جلب قائمة الغرف والمجالس' });
+  }
+});
+
+// Admin / Owner Rooms Pricing Settings
+app.get('/api/admin/rooms-pricing', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.role !== 'owner' && session.role !== 'admin') {
+      return res.status(403).json({ error: 'غير مصرح لك بالوصول لإعدادات أسعار الرومات' });
+    }
+    const db = await getDb();
+    const audioPriceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'room_audio_cost_per_minute'");
+    const videoPriceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'room_video_cost_per_minute'");
+    return res.json({
+      audioCostPerMinute: parseInt(audioPriceRow?.value || '2', 10),
+      videoCostPerMinute: parseInt(videoPriceRow?.value || '5', 10)
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'خطأ في جلب إعدادات الأسعار' });
+  }
+});
+
+app.post('/api/admin/rooms-pricing', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.role !== 'owner' && session.role !== 'admin') {
+      return res.status(403).json({ error: 'صلاحية تعديل أسعار الرومات محصورة للمالك فقط' });
+    }
+    const { audioCostPerMinute, videoCostPerMinute } = req.body;
+    const db = await getDb();
+    if (audioCostPerMinute !== undefined && !isNaN(parseInt(audioCostPerMinute, 10))) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('room_audio_cost_per_minute', ?)", [String(Math.max(0, parseInt(audioCostPerMinute, 10)))]);
+    }
+    if (videoCostPerMinute !== undefined && !isNaN(parseInt(videoCostPerMinute, 10))) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('room_video_cost_per_minute', ?)", [String(Math.max(0, parseInt(videoCostPerMinute, 10)))]);
+    }
+    saveDb();
+    return res.json({
+      success: true,
+      message: 'تم تحديث أسعار الدقيقة للرومات الصوتية ورومات الفيديو بنجاح',
+      audioCostPerMinute: parseInt(queryOne(db, "SELECT value FROM system_settings WHERE key = 'room_audio_cost_per_minute'")?.value || '2', 10),
+      videoCostPerMinute: parseInt(queryOne(db, "SELECT value FROM system_settings WHERE key = 'room_video_cost_per_minute'")?.value || '5', 10)
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'خطأ في حفظ أسعار الرومات' });
   }
 });
 
@@ -3791,39 +4016,45 @@ app.post('/api/rooms', requireAuth, async (req: Request, res: Response) => {
   try {
     const session = (req as any).user as UserSession;
 
-    // Check authorization: Owner or Admin
-    if (session.role !== 'owner' && session.role !== 'admin') {
+    // Allow registered members and admin/owners to create rooms
+    if (session.isGuest) {
       return res.status(403).json({
-        error: 'صلاحية إنشاء الغرف والمجالس محصورة لمالك المنصة والإدارة فقط.'
+        error: 'يرجى تسجيل حساب أولاً لتتمكن من إنشاء مجلس صوتي أو فيديو.'
       });
     }
 
-    if (!session.isGuest && !session.emailVerified) {
-      return res.status(403).json({
-        error: 'يرجى تأكيد بريدك الإلكتروني أولاً لتفعيل صلاحية إنشاء الغرف والمجالس.',
-        requireEmailVerification: true,
-        email: session.email
-      });
-    }
-
-    const { name, description, category, isPrivate, password, rules, imageUrl } = req.body;
+    const { name, description, category, roomType, costPerMinute, isPrivate, password, rules, imageUrl } = req.body;
 
     if (!name || !category) {
       return res.status(400).json({ error: 'يرجى إدخال اسم المجلس والتصنيف' });
     }
 
     const db = await getDb();
+    const type = roomType === 'video' ? 'video' : 'audio';
+
+    // Determine price per minute from settings or override
+    let finalCostPerMinute = 0;
+    if (costPerMinute !== undefined && !isNaN(parseInt(costPerMinute, 10))) {
+      finalCostPerMinute = Math.max(0, parseInt(costPerMinute, 10));
+    } else {
+      const settingKey = type === 'video' ? 'room_video_cost_per_minute' : 'room_audio_cost_per_minute';
+      const settingRow = queryOne(db, "SELECT value FROM system_settings WHERE key = ?", [settingKey]);
+      finalCostPerMinute = parseInt(settingRow?.value || (type === 'video' ? '5' : '2'), 10);
+    }
+
     const roomId = 'room_' + Math.random().toString(36).substring(2, 9);
 
     db.run(
       `INSERT INTO rooms (
-        id, name, description, category, is_private, password_hash, rules, image_url, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, name, description, category, room_type, cost_per_minute, is_private, password_hash, rules, image_url, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         roomId,
         name.trim(),
         description || '',
         category,
+        type,
+        finalCostPerMinute,
         isPrivate ? 1 : 0,
         password ? hashPassword(password).hash : '',
         rules || '',
@@ -3840,14 +4071,20 @@ app.post('/api/rooms', requireAuth, async (req: Request, res: Response) => {
     );
 
     saveDb();
-    return res.json({ success: true, roomId, message: 'تم إنشاء المجلس الحواري بنجاح' });
+    return res.json({
+      success: true,
+      roomId,
+      roomType: type,
+      costPerMinute: finalCostPerMinute,
+      message: `تم إنشاء الروم ال${type === 'video' ? 'فيديو' : 'صوتي'} الجماعي بنجاح`
+    });
   } catch (error) {
     console.error('Create room error:', error);
     return res.status(500).json({ error: 'خطأ أثناء إنشاء الغرفة' });
   }
 });
 
-// Join Room
+// Join Room (With Server-Side Pay-Per-Minute Coins Check & Session Initialization)
 app.post('/api/rooms/:id/join', requireAuth, async (req: Request, res: Response) => {
   try {
     const session = (req as any).user as UserSession;
@@ -3859,19 +4096,139 @@ app.post('/api/rooms/:id/join', requireAuth, async (req: Request, res: Response)
       return res.status(404).json({ error: 'المجلس غير موجود' });
     }
 
-    const existing = queryOne(db, "SELECT * FROM room_members WHERE room_id = ? AND user_id = ?", [roomId, session.userId]);
-    if (!existing) {
+    const costPerMin = room.cost_per_minute || 0;
+    const userWallet = queryOne(db, "SELECT coins FROM users WHERE id = ?", [session.userId]);
+    const currentCoins = userWallet?.coins || 0;
+
+    // Check minimum balance requirement (at least 1 full minute of participation)
+    if (costPerMin > 0 && currentCoins < costPerMin) {
+      return res.status(400).json({
+        error: `رصيد محفظتك غير كافٍ لدخول هذا الروم المدفوع. سعر الدقيقة: ${costPerMin} كوينز ورصيدك الحالي: ${currentCoins} كوينز. يرجى شحن محفظتك للاستمرار.`,
+        requiredCoins: costPerMin,
+        currentCoins
+      });
+    }
+
+    const existingMember = queryOne(db, "SELECT * FROM room_members WHERE room_id = ? AND user_id = ?", [roomId, session.userId]);
+    if (!existingMember) {
       const memberId = 'rm_' + Math.random().toString(36).substring(2, 9);
       db.run(
         "INSERT INTO room_members (id, room_id, user_id, role) VALUES (?, ?, ?, 'member')",
         [memberId, roomId, session.userId]
       );
-      saveDb();
     }
+
+    // Start or update active paid billing session
+    db.run("UPDATE room_active_sessions SET status = 'ended' WHERE user_id = ? AND status = 'active'", [session.userId]);
+    const sessId = 'rsess_' + Math.random().toString(36).substring(2, 9);
+    db.run(
+      `INSERT INTO room_active_sessions (
+        id, room_id, user_id, room_type, cost_per_minute, joined_at, last_billed_at, total_minutes, total_coins_spent, status
+      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, 'active')`,
+      [sessId, roomId, session.userId, room.room_type || 'audio', costPerMin]
+    );
+
+    saveDb();
+
+    // Broadcast member joined
+    broadcastToRoom(db, roomId, {
+      type: 'room:user_joined',
+      roomId,
+      user: {
+        id: session.userId,
+        username: session.username,
+        role: session.role,
+        gender: session.gender,
+        avatar_url: (session as any).avatarUrl || null
+      }
+    }, session.userId);
+
+    return res.json({
+      success: true,
+      sessionId: sessId,
+      roomType: room.room_type || 'audio',
+      costPerMinute: costPerMin,
+      currentCoins
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'خطأ في الانضمام للمجلس' });
+  }
+});
+
+// Leave Room
+app.post('/api/rooms/:id/leave', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const roomId = req.params.id;
+    const db = await getDb();
+
+    // End active session in room
+    db.run(
+      "UPDATE room_active_sessions SET status = 'ended' WHERE room_id = ? AND user_id = ? AND status = 'active'",
+      [roomId, session.userId]
+    );
+
+    // Remove from active speakers
+    db.run("DELETE FROM active_audio_speakers WHERE room_id = ? AND user_id = ?", [roomId, session.userId]);
+    saveDb();
+
+    broadcastToRoom(db, roomId, {
+      type: 'room:user_left',
+      roomId,
+      userId: session.userId
+    }, session.userId);
 
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: 'خطأ في الانضمام للمجلس' });
+    return res.status(500).json({ error: 'خطأ في مغادرة الغرفة' });
+  }
+});
+
+// Get Live Audio & Video Speakers in Room
+app.get('/api/rooms/:id/audio-speakers', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const roomId = req.params.id;
+    const db = await getDb();
+    const rows = queryAll(
+      db,
+      `SELECT s.user_id, s.is_speaking, s.is_muted, u.username, u.avatar_url, u.gender, u.role
+       FROM active_audio_speakers s
+       JOIN users u ON s.user_id = u.id
+       WHERE s.room_id = ?`,
+      [roomId]
+    );
+    return res.json({ speakers: rows });
+  } catch (e) {
+    return res.status(500).json({ error: 'خطأ في جلب المتحدثين' });
+  }
+});
+
+app.post('/api/rooms/:id/audio-stage/join', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const roomId = req.params.id;
+    const db = await getDb();
+    db.run(
+      "INSERT OR REPLACE INTO active_audio_speakers (room_id, user_id, is_speaking, is_muted) VALUES (?, ?, 0, 0)",
+      [roomId, session.userId]
+    );
+    saveDb();
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'خطأ في صعود المنصة' });
+  }
+});
+
+app.post('/api/rooms/:id/audio-stage/leave', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const roomId = req.params.id;
+    const db = await getDb();
+    db.run("DELETE FROM active_audio_speakers WHERE room_id = ? AND user_id = ?", [roomId, session.userId]);
+    saveDb();
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'خطأ في مغادرة المنصة' });
   }
 });
 
@@ -4050,7 +4407,7 @@ app.post('/api/stories', requireAuth, storyRateLimiter, async (req: Request, res
     const { content, mediaUrl, type } = req.body;
 
     if (!content && !mediaUrl) {
-      return res.status(400).json({ error: 'يرجى كتابة نص أو إرفاق صورة للقصة' });
+      return res.status(400).json({ error: 'يرجى كتابة نص أو إرفاق صورة أو فيديو للقصة' });
     }
 
     const db = await getDb();
@@ -5997,19 +6354,26 @@ app.post('/api/upload', requireAuth, uploadRateLimiter, async (req: Request, res
     const mime = parts[0].replace('data:', '');
     const buffer = Buffer.from(parts[1], 'base64');
 
-    // Limit check (max 10MB)
-    if (buffer.length > 10 * 1024 * 1024) {
-      return res.status(400).json({ error: 'حجم الملف يتجاوز الحد الأقصى (10MB)' });
+    // Limit check (max 35MB for images/videos/audio)
+    if (buffer.length > 35 * 1024 * 1024) {
+      return res.status(400).json({ error: 'حجم الملف يتجاوز الحد الأقصى المسموح به (35MB)' });
     }
 
-    // Allowed mime types
-    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'audio/webm', 'audio/mp3', 'audio/wav', 'audio/ogg'];
+    // Allowed mime types including video, audio, and image formats
+    const allowedMimes = [
+      'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+      'audio/webm', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/mpeg',
+      'video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v', 'video/ogg'
+    ];
     if (!allowedMimes.includes(mime)) {
-      return res.status(400).json({ error: 'صيغة الملف غير مدعومة' });
+      return res.status(400).json({ error: 'صيغة الملف غير مدعومة. الصيغ المقبولة: صور (JPG, PNG, WebP) وفيديوهات (MP4, WebM, MOV) ومقاطع صوتية' });
     }
 
     let ext = mime.split('/')[1] || 'bin';
-    if (ext.includes('webm')) ext = 'webm';
+    if (mime === 'video/quicktime') ext = 'mov';
+    else if (mime === 'video/mp4' || ext.includes('mp4')) ext = 'mp4';
+    else if (ext.includes('webm')) ext = 'webm';
+    else if (ext.includes('jpeg')) ext = 'jpg';
 
     const safeName = `file_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
     const filePath = path.join(UPLOAD_DIR, safeName);
@@ -6017,7 +6381,8 @@ app.post('/api/upload', requireAuth, uploadRateLimiter, async (req: Request, res
 
     return res.json({
       success: true,
-      url: `/uploads/${safeName}`
+      url: `/uploads/${safeName}`,
+      mimeType: mime
     });
   } catch (error) {
     console.error('Upload error:', error);
@@ -8036,6 +8401,292 @@ app.post('/api/admin/backup', requireAuth, async (req: Request, res: Response) =
     return res.json({ success: true, message: 'تم إنشاء نسخة احتياطية آمنة لقاعدة البيانات بنجاح' });
   } catch (error) {
     return res.status(500).json({ error: 'خطأ في إنشاء النسخة الاحتياطية' });
+  }
+});
+
+// ==========================================
+// 17. LOGIN BROADCAST MESSAGE
+// ==========================================
+
+app.get('/api/system/login-broadcast', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const enabled = queryOne(db, "SELECT value FROM system_settings WHERE key = 'login_broadcast_enabled'")?.value === 'true';
+    const title = queryOne(db, "SELECT value FROM system_settings WHERE key = 'login_broadcast_title'")?.value || 'أهلاً بك في فضفضه ✨';
+    const content = queryOne(db, "SELECT value FROM system_settings WHERE key = 'login_broadcast_content'")?.value || '';
+    const frequency = queryOne(db, "SELECT value FROM system_settings WHERE key = 'login_broadcast_frequency'")?.value || 'once_per_version';
+    const version = queryOne(db, "SELECT value FROM system_settings WHERE key = 'login_broadcast_version'")?.value || '1';
+
+    return res.json({
+      enabled,
+      title,
+      content,
+      frequency,
+      version
+    });
+  } catch (err) {
+    return res.json({ enabled: false, title: '', content: '', frequency: 'once_per_version', version: '1' });
+  }
+});
+
+app.post('/api/admin/system/login-broadcast', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.role !== 'owner' && session.role !== 'admin') {
+      return res.status(403).json({ error: 'صلاحية المالك مطلوبة' });
+    }
+    const { enabled, title, content, frequency } = req.body;
+    const db = await getDb();
+    if (enabled !== undefined) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_enabled', ?)", [enabled ? 'true' : 'false']);
+    }
+    if (title !== undefined) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_title', ?)", [String(title).trim().slice(0, 120)]);
+    }
+    if (content !== undefined) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_content', ?)", [String(content).trim().slice(0, 3000)]);
+    }
+    if (frequency !== undefined) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_frequency', ?)", [frequency === 'always' ? 'always' : 'once_per_version']);
+    }
+    // Bump version timestamp so users tracking once_per_version receive the update
+    const newVersion = Date.now().toString();
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_version', ?)", [newVersion]);
+    saveDb();
+
+    return res.json({
+      success: true,
+      message: 'تم حفظ إعدادات رسالة تسجيل الدخول بنجاح',
+      version: newVersion
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في تحديث إعدادات رسالة تسجيل الدخول' });
+  }
+});
+
+// ==========================================
+// 18. SITE SUGGESTIONS & CREATOR BADGE
+// ==========================================
+
+app.get('/api/suggestions', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const rows = queryAll(
+      db,
+      `SELECT s.*, u.username as author_username, u.avatar_url as author_avatar, u.gender as author_gender, u.role as author_role
+       FROM site_suggestions s
+       JOIN users u ON s.user_id = u.id
+       ORDER BY s.created_at DESC LIMIT 100`
+    );
+    return res.json({ suggestions: rows });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في جلب الاقتراحات' });
+  }
+});
+
+app.post('/api/suggestions', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { title, description } = req.body;
+    if (!title || !description || typeof title !== 'string' || typeof description !== 'string') {
+      return res.status(400).json({ error: 'يرجى كتابة عنوان ووصف للفكرة' });
+    }
+    if (title.trim().length < 3 || title.trim().length > 120) {
+      return res.status(400).json({ error: 'عنوان الاقتراح يجب أن يكون بين 3 و 120 حرفاً' });
+    }
+    if (description.trim().length < 10 || description.trim().length > 3000) {
+      return res.status(400).json({ error: 'تفاصيل الاقتراح يجب أن تكون بين 10 و 3000 حرفاً' });
+    }
+
+    const db = await getDb();
+    const id = 'sug_' + Math.random().toString(36).substring(2, 9);
+    db.run(
+      `INSERT INTO site_suggestions (id, user_id, title, description, status)
+       VALUES (?, ?, ?, ?, 'new')`,
+      [id, session.userId, title.trim(), description.trim()]
+    );
+    addXp(db, session.userId, 15);
+    saveDb();
+
+    return res.json({
+      success: true,
+      message: 'تم إرسال فكرتك واقتراحك بنجاح لإدارة فضفضه! شكراً لمساهمتك الراقية ✨',
+      id
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في إرسال الاقتراح' });
+  }
+});
+
+app.get('/api/admin/suggestions', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.role !== 'owner' && session.role !== 'admin') {
+      return res.status(403).json({ error: 'صلاحية الإدارة مطلوبة' });
+    }
+    const db = await getDb();
+    const rows = queryAll(
+      db,
+      `SELECT s.*, u.username as author_username, u.email as author_email, u.avatar_url as author_avatar, u.gender as author_gender,
+              (SELECT COUNT(*) FROM user_badges WHERE user_id = s.user_id AND badge_key = 'creator') as has_creator_badge
+       FROM site_suggestions s
+       JOIN users u ON s.user_id = u.id
+       ORDER BY s.created_at DESC`
+    );
+    return res.json({ suggestions: rows });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في جلب الاقتراحات للإدارة' });
+  }
+});
+
+app.patch('/api/admin/suggestions/:id', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.role !== 'owner' && session.role !== 'admin') {
+      return res.status(403).json({ error: 'صلاحية الإدارة مطلوبة' });
+    }
+    const { status, adminReply } = req.body;
+    const db = await getDb();
+    const sug = queryOne(db, "SELECT * FROM site_suggestions WHERE id = ?", [req.params.id]);
+    if (!sug) {
+      return res.status(404).json({ error: 'الاقتراح غير موجود' });
+    }
+
+    const validStatuses = ['new', 'under_review', 'accepted', 'implemented', 'rejected'];
+    const newStatus = validStatuses.includes(status) ? status : sug.status;
+    const reply = adminReply !== undefined ? String(adminReply).trim() : sug.admin_reply;
+
+    db.run(
+      `UPDATE site_suggestions
+       SET status = ?, admin_reply = ?, admin_reply_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [newStatus, reply, req.params.id]
+    );
+
+    const statusNamesAr: Record<string, string> = {
+      'new': 'جديد',
+      'under_review': 'قيد المراجعة والدراسة',
+      'accepted': 'مقبول وسيتم جدولته',
+      'implemented': 'تم التنفيذ بنجاح 🚀',
+      'rejected': 'تم الاعتذار عنه'
+    };
+
+    // Send notification to author
+    const notifId = 'notif_' + Math.random().toString(36).substring(2, 9);
+    const notifTitle = 'تحديث بخصوص فكرتك: ' + (sug.title.length > 30 ? sug.title.slice(0, 30) + '...' : sug.title);
+    const notifBody = reply
+      ? `ردت إدارة فضفضه على فكرتك [${statusNamesAr[newStatus]}]: "${reply}"`
+      : `تم تغيير حالة فكرتك إلى [${statusNamesAr[newStatus]}].`;
+
+    db.run(
+      "INSERT INTO notifications (id, user_id, type, title, body, link) VALUES (?, ?, 'suggestion_update', ?, ?, '/suggestions')",
+      [notifId, sug.user_id, notifTitle, notifBody]
+    );
+    saveDb();
+
+    sendToUser(sug.user_id, {
+      type: 'notification:new',
+      notification: {
+        id: notifId,
+        type: 'suggestion_update',
+        title: notifTitle,
+        body: notifBody,
+        createdAt: new Date().toISOString()
+      }
+    });
+
+    return res.json({ success: true, message: 'تم تحديث حالة الاقتراح وإشعار المستخدم بنجاح' });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في تحديث الاقتراح' });
+  }
+});
+
+// Award 'Creator' Badge to author of suggestion
+app.post('/api/admin/suggestions/:id/award-creator', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.role !== 'owner') {
+      return res.status(403).json({ error: 'إهداء شعار المبدع محصور لمالك المنصة فقط' });
+    }
+    const db = await getDb();
+    const sug = queryOne(db, "SELECT * FROM site_suggestions WHERE id = ?", [req.params.id]);
+    if (!sug) {
+      return res.status(404).json({ error: 'الاقتراح غير موجود' });
+    }
+
+    const badgeId = 'ub_creator_' + sug.user_id;
+    db.run(
+      `INSERT OR REPLACE INTO user_badges (id, user_id, badge_key, badge_name, badge_icon, badge_description, awarded_by, awarded_at)
+       VALUES (?, ?, 'creator', 'المبدع', '💡', 'شعار المبدع الفخري تقديراً لأفكاره المميزة في تطوير فضفضه', ?, CURRENT_TIMESTAMP)`,
+      [badgeId, sug.user_id, session.username]
+    );
+
+    // Add to user inventory as well
+    const invId = 'inv_cr_' + Math.random().toString(36).substring(2, 9);
+    db.run(
+      "INSERT OR IGNORE INTO user_inventory (id, user_id, item_id, is_equipped) VALUES (?, ?, 'shop_badge_creator', 1)",
+      [invId, sug.user_id]
+    );
+
+    // Send notification
+    const notifId = 'notif_' + Math.random().toString(36).substring(2, 9);
+    db.run(
+      "INSERT INTO notifications (id, user_id, type, title, body, link) VALUES (?, ?, 'badge_awarded', '🌟 تهانينا! وسام المبدع', ?, '/profile')",
+      [notifId, sug.user_id, `أهداك مالك منصة فضفضه (${session.username}) شعار «المبدع» 💡 تقديراً لفكرتك المميزة: "${sug.title}"! تظهر الشارة الآن في ملفك الشخصي.`]
+    );
+
+    saveDb();
+
+    sendToUser(sug.user_id, {
+      type: 'notification:new',
+      notification: {
+        id: notifId,
+        type: 'badge_awarded',
+        title: '🌟 تهانينا! وسام المبدع',
+        body: `أهداك مالك منصة فضفضه شعار «المبدع» 💡 تقديراً لفكرتك المميزة: "${sug.title}"!`,
+        createdAt: new Date().toISOString()
+      }
+    });
+
+    return res.json({ success: true, message: 'تم إهداء شعار المبدع لصاحب الفكرة بنجاح! 💡✨' });
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في إهداء الشعار' });
+  }
+});
+
+// Direct toggle of Creator badge for any user
+app.post('/api/admin/users/:id/award-creator-badge', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.role !== 'owner') {
+      return res.status(403).json({ error: 'إهداء شعار المبدع محصور لمالك المنصة فقط' });
+    }
+    const targetUserId = req.params.id;
+    const db = await getDb();
+    const existing = queryOne(db, "SELECT id FROM user_badges WHERE user_id = ? AND badge_key = 'creator'", [targetUserId]);
+
+    if (existing) {
+      db.run("DELETE FROM user_badges WHERE user_id = ? AND badge_key = 'creator'", [targetUserId]);
+      db.run("DELETE FROM user_inventory WHERE user_id = ? AND item_id = 'shop_badge_creator'", [targetUserId]);
+      saveDb();
+      return res.json({ success: true, awarded: false, message: 'تم سحب شعار المبدع من المستخدم' });
+    } else {
+      const badgeId = 'ub_creator_' + targetUserId;
+      db.run(
+        `INSERT OR REPLACE INTO user_badges (id, user_id, badge_key, badge_name, badge_icon, badge_description, awarded_by, awarded_at)
+         VALUES (?, ?, 'creator', 'المبدع', '💡', 'شعار المبدع الفخري تقديراً لأفكاره المميزة في تطوير فضفضه', ?, CURRENT_TIMESTAMP)`,
+        [badgeId, targetUserId, session.username]
+      );
+      const invId = 'inv_cr_' + Math.random().toString(36).substring(2, 9);
+      db.run(
+        "INSERT OR IGNORE INTO user_inventory (id, user_id, item_id, is_equipped) VALUES (?, ?, 'shop_badge_creator', 1)",
+        [invId, targetUserId]
+      );
+      saveDb();
+      return res.json({ success: true, awarded: true, message: 'تم إهداء شعار المبدع للمستخدم بنجاح! 💡' });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'خطأ في معالجة الشعار' });
   }
 });
 

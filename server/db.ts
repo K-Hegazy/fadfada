@@ -760,6 +760,69 @@ function initSchema(db: SqlDatabase) {
   try { db.run("ALTER TABLE terms_agreements ADD COLUMN guest_session_id TEXT DEFAULT ''"); } catch {}
   try { db.run("ALTER TABLE terms_agreements ADD COLUMN user_agent TEXT DEFAULT ''"); } catch {}
 
+  // Safe migrations for Rooms Audio/Video types and pricing
+  try { db.run("ALTER TABLE rooms ADD COLUMN room_type TEXT DEFAULT 'audio'"); } catch {}
+  try { db.run("ALTER TABLE rooms ADD COLUMN cost_per_minute INTEGER DEFAULT 0"); } catch {}
+
+  // Rooms active session tracking for server-side pay-per-minute billing
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS room_active_sessions (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        room_type TEXT DEFAULT 'audio',
+        cost_per_minute INTEGER DEFAULT 0,
+        joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_billed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        total_minutes INTEGER DEFAULT 0,
+        total_coins_spent INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    db.run("CREATE INDEX IF NOT EXISTS idx_room_sessions_active ON room_active_sessions(status, room_id, user_id)");
+  } catch {}
+
+  // Safe creation of Site Suggestions table
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS site_suggestions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT DEFAULT 'new',
+        admin_reply TEXT DEFAULT '',
+        admin_reply_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    db.run("CREATE INDEX IF NOT EXISTS idx_suggestions_status ON site_suggestions(status, created_at)");
+  } catch {}
+
+  // Safe creation of User Badges table (including honorary 'creator' badge)
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS user_badges (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        badge_key TEXT NOT NULL,
+        badge_name TEXT NOT NULL,
+        badge_icon TEXT NOT NULL,
+        badge_description TEXT DEFAULT '',
+        awarded_by TEXT DEFAULT '',
+        awarded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, badge_key),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    db.run("CREATE INDEX IF NOT EXISTS idx_user_badges_user ON user_badges(user_id)");
+  } catch {}
+
   // Seed default system settings if not existing
   seedDefaultData(db);
 }
@@ -776,6 +839,23 @@ function seedDefaultData(db: SqlDatabase) {
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('profanity_filter_enabled', 'true')");
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('suspicious_links_filter', 'true')");
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('rate_limit_login_lockout_mins', '15')");
+  }
+
+  // Seed default Room minute prices if not set
+  const audioRoomPrice = db.exec("SELECT value FROM system_settings WHERE key = 'room_audio_cost_per_minute'");
+  if (audioRoomPrice.length === 0 || audioRoomPrice[0].values.length === 0) {
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('room_audio_cost_per_minute', '2')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('room_video_cost_per_minute', '5')");
+  }
+
+  // Seed default Login Broadcast settings if not set
+  const loginBroadcast = db.exec("SELECT value FROM system_settings WHERE key = 'login_broadcast_enabled'");
+  if (loginBroadcast.length === 0 || loginBroadcast[0].values.length === 0) {
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_enabled', 'false')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_title', 'أهلاً بك في مجتمع فضفضه ✨')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_content', 'نتمنى لك تجربة راقية وممتعة. فضفض بحرية واحترام مع أصدقائك.')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_frequency', 'once_per_version')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('login_broadcast_version', '1')");
   }
 
   // Payment configuration (Manual transfer: InstaPay / Vodafone Cash / Mobile wallets)
@@ -949,6 +1029,13 @@ function seedDefaultData(db: SqlDatabase) {
       );
     }
   }
+
+  // Ensure honorary 'Creator' badge is registered
+  try {
+    db.run(
+      "INSERT OR IGNORE INTO shop_items (id, name, description, icon, price_coins, type, category, duration_hours, is_active, display_order, metadata_json) VALUES ('shop_badge_creator', 'شعار المبدع', 'شعار تكريمي فخري يُهدى حصرياً من مالك المنصة لأصحاب الأفكار الاستثنائية لتطوير فضفضه', '💡', 0, 'badge', 'honorary', NULL, 1, 0, '{\"badgeTag\":\"المبدع\",\"badgeColor\":\"from-yellow-400 to-amber-600\",\"isHonorary\":true}')"
+    );
+  } catch {}
 
   // Seed Default VIP Plans if empty
   try {
