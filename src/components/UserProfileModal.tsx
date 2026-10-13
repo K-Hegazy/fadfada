@@ -371,13 +371,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       </div>
 
       {/* 3. Independent Scrollable Profile Body - ONLY THIS CONTAINER SCROLLS */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-6 pt-0 space-y-5 custom-scrollbar">
-        {/* Hero Identity: Large Avatar + Core Badges + Name */}
-        <div className="relative -mt-14 sm:-mt-16 flex flex-col items-center text-center space-y-3">
-          {/* Avatar Container */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-6 pt-3 sm:pt-4 space-y-5 custom-scrollbar">
+        {/* Hero Identity: Large Avatar fully below cover banner, followed by Name & Core Badges */}
+        <div className="relative flex flex-col items-center text-center space-y-3">
+          {/* Avatar Container - Completely visible without being clipped or covered by the banner */}
           <div className="relative group">
             <div
-              className={`w-26 h-26 sm:w-28 sm:h-28 rounded-3xl bg-[#0d111a] border-4 border-[#080b11] flex items-center justify-center font-cairo font-bold text-3xl shadow-2xl overflow-hidden ${frameBorderClass}`}
+              className={`w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-[#0d111a] border-4 border-[#080b11] flex items-center justify-center font-cairo font-bold text-3xl shadow-2xl overflow-hidden ${frameBorderClass}`}
             >
               {profile.avatar_url || profile.avatarUrl ? (
                 <img
@@ -424,6 +424,27 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               <h2 className="text-xl sm:text-2xl font-cairo font-black text-white tracking-wide">
                 {profile.username}
               </h2>
+
+              {/* Paid Verification Badge */}
+              {profile.isPaidVerified && (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-950/90 border border-sky-500/80 text-sky-300 text-[10px] font-bold shadow-sm"
+                  title="علامة توثيق مدفوعة (اشتراك)"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 fill-sky-400 text-[#080b11]" />
+                  <span>موثّق (اشتراك)</span>
+                </span>
+              )}
+
+              {/* Honorary Creator Badge */}
+              {(profile.hasCreatorBadge || profile.role === 'creator') && (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-950/90 border border-yellow-500/80 text-yellow-300 text-[10px] font-bold shadow-sm"
+                  title="شعار «المبدع» التقديري"
+                >
+                  <span>💡 المبدع</span>
+                </span>
+              )}
 
               {isOwner && <OwnerBadge size="sm" />}
 
@@ -648,8 +669,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {/* Exclusive Creator Badge if awarded */}
-            {profile.hasCreatorBadge && (
+            {/* Exclusive Creator Badge if awarded or role is creator */}
+            {(profile.hasCreatorBadge || profile.role === 'creator') && (
               <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-950/60 to-yellow-950/40 border-2 border-yellow-500/70 flex items-center gap-3 shadow-lg shadow-yellow-500/10">
                 <div className="w-9 h-9 rounded-xl bg-yellow-500/20 text-yellow-300 flex items-center justify-center text-xl shrink-0 border border-yellow-500/50">
                   💡
@@ -660,7 +681,25 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                     <Sparkles className="w-3 h-3 text-yellow-400 animate-pulse" />
                   </div>
                   <div className="text-[10px] text-neutral-300 font-tajawal leading-tight">
-                    وسام شرفي فخري مهدى من مالك فضفضه لأصحاب الأفكار المميزة
+                    وسام شرفي فخري مهدى من مالك فضفضه تقديراً للمقترحات المميزة
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Paid Verification Badge if active */}
+            {profile.isPaidVerified && (
+              <div className="p-3 rounded-2xl bg-gradient-to-r from-sky-950/60 to-cyan-950/40 border-2 border-sky-500/70 flex items-center gap-3 shadow-lg shadow-sky-500/10">
+                <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-300 flex items-center justify-center text-xl shrink-0 border border-sky-500/50">
+                  <CheckCircle2 className="w-5 h-5 fill-sky-400 text-[#080b11]" />
+                </div>
+                <div className="text-right min-w-0">
+                  <div className="text-xs font-black text-sky-300 font-cairo flex items-center gap-1.5">
+                    <span>علامة التوثيق (اشتراك)</span>
+                    <Sparkles className="w-3 h-3 text-sky-400" />
+                  </div>
+                  <div className="text-[10px] text-neutral-300 font-tajawal leading-tight">
+                    علامة توثيق مدفوعة سارية كرمز اشتراك مميز في الحساب
                   </div>
                 </div>
               </div>

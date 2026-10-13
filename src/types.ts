@@ -1,5 +1,5 @@
 export type Gender = 'female' | 'male';
-export type UserRole = 'user' | 'moderator' | 'admin' | 'owner';
+export type UserRole = 'user' | 'moderator' | 'admin' | 'owner' | 'creator';
 export type VipLevel = 'none' | 'bronze' | 'silver' | 'gold' | 'royal';
 
 export interface User {
@@ -34,6 +34,9 @@ export interface User {
   pinExpiresAt?: string;
   equippedBadge?: string;
   equippedFrame?: string;
+  hasCreatorBadge?: boolean;
+  isPaidVerified?: boolean;
+  paidVerifiedUntil?: string | null;
   unreadNotifications?: number;
   unreadMessages?: number;
   pendingFriendRequests?: number;
@@ -88,6 +91,8 @@ export interface OnlineUserItem {
   equippedBadge?: string | null;
   equippedFrame?: string | null;
   hasCreatorBadge?: boolean;
+  isPaidVerified?: boolean;
+  paidVerifiedUntil?: string | null;
   isGuest?: boolean;
 }
 

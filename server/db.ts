@@ -823,6 +823,10 @@ function initSchema(db: SqlDatabase) {
     db.run("CREATE INDEX IF NOT EXISTS idx_user_badges_user ON user_badges(user_id)");
   } catch {}
 
+  // Safe migrations for Paid Verification Badge
+  try { db.run("ALTER TABLE users ADD COLUMN is_paid_verified INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE users ADD COLUMN paid_verified_until DATETIME DEFAULT NULL"); } catch {}
+
   // Seed default system settings if not existing
   seedDefaultData(db);
 }
@@ -846,6 +850,15 @@ function seedDefaultData(db: SqlDatabase) {
   if (audioRoomPrice.length === 0 || audioRoomPrice[0].values.length === 0) {
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('room_audio_cost_per_minute', '2')");
     db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('room_video_cost_per_minute', '5')");
+  }
+
+  // Seed default Paid Verification settings if not set
+  const verifPrice = db.exec("SELECT value FROM system_settings WHERE key = 'verification_price_coins'");
+  if (verifPrice.length === 0 || verifPrice[0].values.length === 0) {
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_price_coins', '500')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_duration_days', '30')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_perks', 'شارة توثيق مدفوعة مميزة بجانب الاسم في كافة المحادثات والغرف وقائمة المتصلين، أولوية الحضور والتفاعل، بريق خاص للملف الشخصي')");
+    db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_enabled', 'true')");
   }
 
   // Seed default Login Broadcast settings if not set

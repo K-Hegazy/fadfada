@@ -13,7 +13,8 @@ import {
   Sparkles,
   Smile,
   X,
-  MessageCircle
+  MessageCircle,
+  CheckCircle2
 } from 'lucide-react';
 
 interface OnlineUsersPageProps {
@@ -429,7 +430,14 @@ export const OnlineUsersPage: React.FC<OnlineUsersPageProps> = ({
                 </span>
               )}
 
-              {item.hasCreatorBadge && (
+              {item.isPaidVerified && (
+                <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-sky-300 bg-sky-950/80 border border-sky-500/60 px-1.5 py-0.2 rounded shadow-sm shrink-0" title="علامة توثيق مدفوعة (اشتراك)">
+                  <CheckCircle2 className="w-2.5 h-2.5 fill-sky-400 text-neutral-950" />
+                  <span>موثّق</span>
+                </span>
+              )}
+
+              {(item.hasCreatorBadge || item.role === 'creator') && (
                 <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-yellow-300 bg-yellow-950/80 border border-yellow-600/60 px-1.5 py-0.2 rounded shadow-sm shrink-0" title="شعار «المبدع» التقديري">
                   <span>💡</span>
                   <span>المبدع</span>
