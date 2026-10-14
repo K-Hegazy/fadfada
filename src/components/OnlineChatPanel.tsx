@@ -57,6 +57,7 @@ interface OnlineChatPanelProps {
     isOnline: boolean;
     equippedBadge?: string | null;
     hasCreatorBadge?: boolean;
+    isPaidVerified?: boolean;
     isGuest?: boolean;
   };
   onClose: () => void;

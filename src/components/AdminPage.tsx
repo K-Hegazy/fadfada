@@ -96,6 +96,14 @@ export const AdminPage: React.FC = () => {
   const [savingRoomPricing, setSavingRoomPricing] = useState<boolean>(false);
   const [roomPricingSaved, setRoomPricingSaved] = useState<boolean>(false);
 
+  // Paid Verification Badge states (Owner setting)
+  const [verificationPrice, setVerificationPrice] = useState<number>(500);
+  const [verificationDurationDays, setVerificationDurationDays] = useState<number>(30);
+  const [verificationPerks, setVerificationPerks] = useState<string>('علامة توثيق مدفوعة زرقاء مميزة بجانب الاسم، تميز بصري في المحادثات وقائمة المتواجدين، أولوية في التفاعل ومظهر بارز للحساب');
+  const [verificationEnabled, setVerificationEnabled] = useState<boolean>(true);
+  const [savingVerification, setSavingVerification] = useState<boolean>(false);
+  const [verificationSaved, setVerificationSaved] = useState<boolean>(false);
+
   // Login Broadcast Message states (Owner setting)
   const [broadcastEnabled, setBroadcastEnabled] = useState<boolean>(false);
   const [broadcastTitle, setBroadcastTitle] = useState<string>('أهلاً بك في مجتمع فضفضه ✨');
@@ -386,11 +394,49 @@ export const AdminPage: React.FC = () => {
     if (activeTab === 'settings') {
       fetchRoomPricing();
       fetchBroadcastSettings();
+      fetchVerificationSettings();
     }
     if (activeTab === 'suggestions') {
       fetchAdminSuggestions();
     }
   }, [activeTab]);
+
+  const fetchVerificationSettings = async () => {
+    try {
+      const res = await apiRequest('/admin/verification-settings');
+      if (res) {
+        setVerificationPrice(Number(res.price) || 500);
+        setVerificationDurationDays(Number(res.durationDays) || 30);
+        setVerificationPerks(res.perks || '');
+        setVerificationEnabled(res.enabled !== false);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleSaveVerification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingVerification(true);
+    try {
+      await apiRequest('/admin/verification-settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          price: Number(verificationPrice),
+          durationDays: Number(verificationDurationDays),
+          perks: verificationPerks,
+          enabled: verificationEnabled
+        })
+      });
+      setVerificationSaved(true);
+      showNotification('تم حفظ إعدادات وسعر علامة التوثيق بنجاح! ✔️');
+      setTimeout(() => setVerificationSaved(false), 2500);
+    } catch (err: any) {
+      alert(err.message || 'فشل حفظ إعدادات التوثيق');
+    } finally {
+      setSavingVerification(false);
+    }
+  };
 
   const fetchRoomPricing = async () => {
     try {
@@ -1210,6 +1256,12 @@ export const AdminPage: React.FC = () => {
                         {u.role === 'owner' && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">المالك</span>
                         )}
+                        {u.role === 'creator' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-950 text-yellow-300 border border-yellow-800 flex items-center gap-1">
+                            <span>💡</span>
+                            <span>المبدع</span>
+                          </span>
+                        )}
                       </td>
 
                       <td className="p-3.5">
@@ -1220,11 +1272,14 @@ export const AdminPage: React.FC = () => {
                             className="px-2 py-1 rounded bg-neutral-900 border border-neutral-700 text-white text-xs"
                           >
                             <option value="user">عضو (User)</option>
+                            <option value="creator">💡 المبدع (Creator - تقديري)</option>
                             <option value="moderator">مشرف (Moderator)</option>
                             <option value="admin">مدير (Admin)</option>
                           </select>
                         ) : (
-                          <span className="font-bold text-amber-400">{u.role}</span>
+                          <span className="font-bold text-amber-400">
+                            {u.role === 'creator' ? '💡 المبدع' : u.role}
+                          </span>
                         )}
                       </td>
 
@@ -1892,6 +1947,121 @@ export const AdminPage: React.FC = () => {
                 >
                   <Save className="w-4 h-4" />
                   <span>{savingRoomPricing ? 'جاري الحفظ...' : 'حفظ أسعار الرومات'}</span>
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Card: Paid Verification Badge Settings (Owner Only) */}
+          {isOwner && (
+            <div className="p-6 rounded-3xl bg-[#0e1017] border border-sky-500/30 space-y-5 shadow-xl">
+              <div className="flex items-center justify-between border-b border-neutral-850 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400">
+                    <CheckCircle2 className="w-5 h-5 fill-sky-400 text-neutral-950" />
+                  </div>
+                  <div>
+                    <h2 className="font-cairo font-bold text-base text-white">
+                      إدارة علامة التوثيق المدفوعة (Verified Badge)
+                    </h2>
+                    <p className="text-xs text-neutral-400 font-tajawal">
+                      تحديد سعر الشراء بالكوينز، ومدة الصلاحية بالأيام، والمميزات الترويجية لمنتج التوثيق في المتجر.
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] px-2.5 py-1 rounded-full bg-sky-950/80 text-sky-300 border border-sky-800/60 font-bold">
+                  خاص بالمالك
+                </span>
+              </div>
+
+              <form onSubmit={handleSaveVerification} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Price in Coins */}
+                  <div className="p-4 rounded-2xl bg-[#07090e] border border-neutral-800 space-y-2">
+                    <label className="block text-xs font-bold text-sky-300 font-tajawal flex items-center gap-2">
+                      <Coins className="w-4 h-4 text-sky-400" />
+                      <span>سعر علامة التوثيق (كوينز)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100000}
+                      value={verificationPrice}
+                      onChange={(e) => setVerificationPrice(Math.max(1, parseInt(e.target.value) || 0))}
+                      className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-750 focus:border-sky-500 text-white font-mono text-sm outline-none"
+                    />
+                    <p className="text-[11px] text-neutral-500 font-tajawal">
+                      يُخصم هذا المبلغ تلقائياً من محفظة المستخدم على الخادم عند الشراء أو التجديد.
+                    </p>
+                  </div>
+
+                  {/* Duration in Days */}
+                  <div className="p-4 rounded-2xl bg-[#07090e] border border-neutral-800 space-y-2">
+                    <label className="block text-xs font-bold text-teal-300 font-tajawal flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-teal-400" />
+                      <span>مدة صلاحية التوثيق (بالأيام)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={verificationDurationDays}
+                      onChange={(e) => setVerificationDurationDays(Math.max(1, parseInt(e.target.value) || 0))}
+                      className="w-full px-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-750 focus:border-teal-500 text-white font-mono text-sm outline-none"
+                    />
+                    <p className="text-[11px] text-neutral-500 font-tajawal">
+                      عدد الأيام التي تظل فيها علامة التوثيق مفعلة على حساب المستخدم بعد الشراء.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Features & Perks description */}
+                <div className="p-4 rounded-2xl bg-[#07090e] border border-neutral-800 space-y-2">
+                  <label className="block text-xs font-bold text-neutral-300 font-tajawal">
+                    المميزات الموضحة للمستخدم في المتجر
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={verificationPerks}
+                    onChange={(e) => setVerificationPerks(e.target.value)}
+                    placeholder="اكتب مميزات التوثيق الموضحة للمستخدم..."
+                    className="w-full px-4 py-2 rounded-xl bg-neutral-900 border border-neutral-750 focus:border-sky-500 text-white text-xs outline-none resize-none font-tajawal"
+                  />
+                </div>
+
+                {/* Active Toggle Switch */}
+                <div className="flex items-center justify-between p-4 rounded-2xl bg-[#07090e] border border-neutral-800">
+                  <div>
+                    <div className="text-xs font-bold text-white font-cairo">إتاحة شراء علامة التوثيق في المتجر</div>
+                    <div className="text-[11px] text-neutral-400 font-tajawal">
+                      عند التعطيل، يظهر المنتج كمعطل مؤقتاً في المتجر ولا يمكن الشراء.
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={verificationEnabled}
+                      onChange={(e) => setVerificationEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
+                  </label>
+                </div>
+
+                {verificationSaved && (
+                  <div className="p-3 rounded-xl bg-sky-950/60 border border-sky-700 text-sky-300 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>تم حفظ إعدادات وسعر علامة التوثيق بنجاح!</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={savingVerification}
+                  className="w-full py-3 rounded-2xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold text-sm shadow-lg shadow-sky-600/20 cursor-pointer disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{savingVerification ? 'جاري الحفظ...' : 'حفظ إعدادات علامة التوثيق'}</span>
                 </button>
               </form>
             </div>

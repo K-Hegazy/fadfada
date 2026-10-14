@@ -7,6 +7,7 @@ import { OnlineChatPanel } from './components/OnlineChatPanel';
 import { MessagesPage } from './components/MessagesPage';
 import { FriendsPage } from './components/FriendsPage';
 import { RoomsPage } from './components/RoomsPage';
+import { VoiceRoomsPage } from './components/VoiceRoomsPage';
 import { StoriesPage } from './components/StoriesPage';
 import { UserProfileModal } from './components/UserProfileModal';
 import { GiftsModal } from './components/GiftsModal';
@@ -249,6 +250,8 @@ function AppContent() {
         isPinned: !!p.isPinned,
         equippedBadge: p.equipped_badge || p.equippedBadge,
         equippedFrame: p.equipped_frame || p.equippedFrame,
+        hasCreatorBadge: !!(p.hasCreatorBadge || p.has_creator_badge || p.role === 'creator'),
+        isPaidVerified: !!(p.isPaidVerified || p.is_paid_verified),
         isGuest: !!p.isGuest
       });
       setSelectedProfileId(null);
@@ -382,6 +385,7 @@ function AppContent() {
       )}
 
       {currentTab === 'rooms' && <RoomsPage />}
+      {currentTab === 'voice_rooms' && <VoiceRoomsPage />}
       {currentTab === 'events' && (
         <EventsPage onOpenProfile={(id) => setSelectedProfileId(id)} />
       )}

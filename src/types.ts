@@ -215,8 +215,8 @@ export interface Room {
   name: string;
   description?: string;
   category: string;
-  room_type?: 'audio' | 'video';
-  roomType?: 'audio' | 'video';
+  room_type?: 'chat' | 'audio' | 'video';
+  roomType?: 'chat' | 'audio' | 'video';
   cost_per_minute?: number;
   costPerMinute?: number;
   is_private: number;

@@ -24,7 +24,8 @@ import {
   Calendar,
   Newspaper,
   Shuffle,
-  Lightbulb
+  Lightbulb,
+  Radio
 } from 'lucide-react';
 import { OwnerBadge, isUserOwner } from './OwnerBadge';
 
@@ -67,7 +68,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       title: 'المجتمع والتواصل',
       items: [
         { key: 'online', label: 'المتواجدون حالياً', icon: Users },
-        { key: 'rooms', label: 'الغرف والمجالس', icon: Compass },
+        { key: 'rooms', label: 'رومات الشات', icon: Compass },
+        { key: 'voice_rooms', label: 'الرومات الصوتية والمرئية', icon: Radio },
         { key: 'events', label: 'الفعاليات', icon: Calendar },
         { key: 'news', label: 'المنشورات والأخبار', icon: Newspaper },
       ]

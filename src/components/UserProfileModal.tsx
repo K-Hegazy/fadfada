@@ -23,7 +23,8 @@ import {
   Clock,
   Shield,
   Layers,
-  Heart
+  Heart,
+  CheckCircle2
 } from 'lucide-react';
 import { OwnerBadge, isUserOwner } from './OwnerBadge';
 
@@ -447,6 +448,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               )}
 
               {isOwner && <OwnerBadge size="sm" />}
+              {!isOwner && profile.role === 'admin' && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-950/90 border border-indigo-500/80 text-indigo-300 text-[10px] font-bold shadow-sm" title="مدير المنصة">
+                  <span>🛡️ المدير</span>
+                </span>
+              )}
+              {!isOwner && profile.role === 'moderator' && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-500/80 text-emerald-300 text-[10px] font-bold shadow-sm" title="مشرف المنصة">
+                  <span>⚡ المشرف</span>
+                </span>
+              )}
 
               {profile.vip_level && profile.vip_level !== 'none' && !isOwner && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-800/60 text-amber-300 text-[10px] font-bold shadow-sm">

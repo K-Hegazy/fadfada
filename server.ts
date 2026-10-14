@@ -1687,6 +1687,9 @@ app.get('/api/auth/me', requireAuth, async (req: Request, res: Response) => {
         streak: user.streak,
         vipLevel: user.vip_level,
         vipExpiresAt: user.vip_expires_at || null,
+        isPaidVerified: !!(user.is_paid_verified && user.paid_verified_until && new Date(user.paid_verified_until).getTime() > Date.now()),
+        paidVerifiedUntil: user.paid_verified_until || null,
+        hasCreatorBadge: !!queryOne(db, "SELECT id FROM user_badges WHERE user_id = ? AND badge_key = 'creator'", [user.id]) || user.role === 'creator',
         isGuest: user.is_guest === 1,
         guestMessagesRemaining: user.guest_messages_remaining,
         referralCode: user.referral_code,
@@ -1751,6 +1754,7 @@ app.get('/api/users/online', requireAuth, async (req: Request, res: Response) =>
       SELECT u.id, u.username, u.role, u.gender, u.country, u.bio, u.avatar_url, u.activity_status,
              u.level, u.xp, u.vip_level, u.is_guest,
              u.privacy_online_status, u.privacy_last_seen,
+             u.is_paid_verified, u.paid_verified_until,
              MAX(s.is_online) as is_online,
              MAX(s.last_active_at) as last_active_at,
              MAX(CASE WHEN pin.id IS NOT NULL THEN 1 ELSE 0 END) as is_pinned
@@ -1885,7 +1889,9 @@ app.get('/api/users/online', requireAuth, async (req: Request, res: Response) =>
       vipLevel: u.is_guest === 1 ? 'none' : u.vip_level,
       isGuest: u.is_guest === 1,
       isPinned: u.is_pinned === 1,
-      hasCreatorBadge: !!queryOne(db, "SELECT id FROM user_badges WHERE user_id = ? AND badge_key = 'creator'", [u.id]),
+      isPaidVerified: !!(u.is_paid_verified && u.paid_verified_until && new Date(u.paid_verified_until).getTime() > Date.now()),
+      paidVerifiedUntil: u.paid_verified_until || null,
+      hasCreatorBadge: !!queryOne(db, "SELECT id FROM user_badges WHERE user_id = ? AND badge_key = 'creator'", [u.id]) || u.role === 'creator',
       equippedBadge: u.is_guest === 1 ? null : (badgesMap[u.id] || null),
       equippedFrame: u.is_guest === 1 ? null : (framesMap[u.id] || null),
       isOnline: u.privacy_online_status === 'nobody' ? false : (u.is_online === 1 || isUserOnline(u.id)),
@@ -1935,7 +1941,8 @@ app.get(['/api/users/:id/profile', '/api/users/:id'], requireAuth, async (req: R
       db,
       `SELECT id, username, role, gender, country, bio, avatar_url, cover_url, level, xp, streak,
               vip_level, created_at, is_guest, privacy_messages, privacy_friend_requests,
-              privacy_story_visibility, privacy_profile_visibility, privacy_online_status, privacy_last_seen
+              privacy_story_visibility, privacy_profile_visibility, privacy_online_status, privacy_last_seen,
+              is_paid_verified, paid_verified_until
        FROM users WHERE id = ? AND is_banned = 0`,
       [targetId]
     );
@@ -2127,8 +2134,10 @@ app.get(['/api/users/:id/profile', '/api/users/:id'], requireAuth, async (req: R
       interests,
       achievements,
       giftsReceived,
+      isPaidVerified: !!(user.is_paid_verified && user.paid_verified_until && new Date(user.paid_verified_until).getTime() > Date.now()),
+      paidVerifiedUntil: user.paid_verified_until || null,
+      hasCreatorBadge: hasCreatorBadge || user.role === 'creator',
       badges: allBadges,
-      hasCreatorBadge,
       stats: {
         friendsCount,
         followersCount,
@@ -3935,6 +3944,14 @@ app.delete('/api/messages/:id', requireAuth, handleDeleteMessage);
 app.get('/api/rooms', requireAuth, async (req: Request, res: Response) => {
   try {
     const db = await getDb();
+    const typeFilter = req.query.type as string;
+    let whereClause = "";
+    if (typeFilter === 'chat') {
+      whereClause = "WHERE (r.room_type = 'chat' OR r.room_type = 'text')";
+    } else if (typeFilter === 'voice' || typeFilter === 'media' || typeFilter === 'av' || typeFilter === 'audio_video') {
+      whereClause = "WHERE (r.room_type IN ('audio', 'video') OR r.room_type IS NULL)";
+    }
+
     const rows = queryAll(
       db,
       `SELECT r.*, u.username as creator_username,
@@ -3942,6 +3959,7 @@ app.get('/api/rooms', requireAuth, async (req: Request, res: Response) => {
               (SELECT COUNT(*) FROM room_active_sessions WHERE room_id = r.id AND status = 'active') as active_participants_count
        FROM rooms r
        JOIN users u ON r.created_by = u.id
+       ${whereClause}
        ORDER BY r.created_at DESC`
     );
 
@@ -4030,11 +4048,13 @@ app.post('/api/rooms', requireAuth, async (req: Request, res: Response) => {
     }
 
     const db = await getDb();
-    const type = roomType === 'video' ? 'video' : 'audio';
+    const type = roomType === 'video' ? 'video' : (roomType === 'chat' || roomType === 'text') ? 'chat' : 'audio';
 
-    // Determine price per minute from settings or override
+    // Determine price per minute: chat rooms are free (0 coins)
     let finalCostPerMinute = 0;
-    if (costPerMinute !== undefined && !isNaN(parseInt(costPerMinute, 10))) {
+    if (type === 'chat') {
+      finalCostPerMinute = 0;
+    } else if (costPerMinute !== undefined && !isNaN(parseInt(costPerMinute, 10))) {
       finalCostPerMinute = Math.max(0, parseInt(costPerMinute, 10));
     } else {
       const settingKey = type === 'video' ? 'room_video_cost_per_minute' : 'room_audio_cost_per_minute';
@@ -4118,15 +4138,18 @@ app.post('/api/rooms/:id/join', requireAuth, async (req: Request, res: Response)
       );
     }
 
-    // Start or update active paid billing session
-    db.run("UPDATE room_active_sessions SET status = 'ended' WHERE user_id = ? AND status = 'active'", [session.userId]);
-    const sessId = 'rsess_' + Math.random().toString(36).substring(2, 9);
-    db.run(
-      `INSERT INTO room_active_sessions (
-        id, room_id, user_id, room_type, cost_per_minute, joined_at, last_billed_at, total_minutes, total_coins_spent, status
-      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, 'active')`,
-      [sessId, roomId, session.userId, room.room_type || 'audio', costPerMin]
-    );
+    // Start or update active paid billing session for audio / video rooms
+    let sessId: string | null = null;
+    if (room.room_type !== 'chat' && costPerMin > 0) {
+      db.run("UPDATE room_active_sessions SET status = 'ended' WHERE user_id = ? AND status = 'active'", [session.userId]);
+      sessId = 'rsess_' + Math.random().toString(36).substring(2, 9);
+      db.run(
+        `INSERT INTO room_active_sessions (
+          id, room_id, user_id, room_type, cost_per_minute, joined_at, last_billed_at, total_minutes, total_coins_spent, status
+        ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, 'active')`,
+        [sessId, roomId, session.userId, room.room_type || 'audio', costPerMin]
+      );
+    }
 
     saveDb();
 
@@ -6522,8 +6545,8 @@ app.post('/api/admin/users/:id/role', requireAuth, requireOwner, async (req: Req
   try {
     const targetId = req.params.id;
     const { role } = req.body;
-    if (!['user', 'moderator', 'admin'].includes(role)) {
-      return res.status(400).json({ error: 'رتبة غير صالحة. لا يمكن ترقية أي حساب إلى رتبة مالك' });
+    if (!['user', 'creator', 'moderator', 'admin'].includes(role)) {
+      return res.status(400).json({ error: 'رتبة أو شعار غير صالح. لا يمكن ترقية أي حساب إلى رتبة مالك' });
     }
 
     const db = await getDb();
@@ -6536,9 +6559,23 @@ app.post('/api/admin/users/:id/role', requireAuth, requireOwner, async (req: Req
     }
 
     db.run("UPDATE users SET role = ? WHERE id = ?", [role, targetId]);
+    if (role === 'creator') {
+      db.run(
+        "INSERT OR IGNORE INTO user_badges (user_id, badge_key, badge_name, badge_icon, badge_description) VALUES (?, 'creator', 'المبدع', '💡', 'شعار تقديري استثنائي يُمنح من مالك المنصة تقديراً للأفكار والمشاركات الملهمة')",
+        [targetId]
+      );
+    }
     saveDb();
+    broadcastOnlineStatus(targetId, true);
 
-    return res.json({ success: true, message: `تم تحديث الرتبة إلى ${role}` });
+    const roleNameMap: Record<string, string> = {
+      user: 'عضو',
+      creator: 'شعار «المبدع» التقديري',
+      moderator: 'مشرف',
+      admin: 'مدير'
+    };
+
+    return res.json({ success: true, message: `تم تحديث الحساب ومنح ${roleNameMap[role] || role} بنجاح` });
   } catch (error) {
     return res.status(500).json({ error: 'خطأ في تعديل الرتبة' });
   }
@@ -7749,6 +7786,182 @@ app.delete('/api/shop/items/:id', requireAuth, requireOwner, async (req: Request
   } catch (error) {
     console.error('Delete shop item error:', error);
     return res.status(500).json({ error: 'خطأ أثناء تعطيل العنصر' });
+  }
+});
+
+// ==========================================
+// PAID VERIFICATION BADGE ("منتج علامة التوثيق")
+// ==========================================
+
+// Get Verification Product Details & User Status
+app.get('/api/shop/verification', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const db = await getDb();
+
+    const priceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_price_coins'");
+    const durationRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_duration_days'");
+    const perksRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_perks'");
+    const enabledRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_enabled'");
+
+    const price = parseInt(priceRow?.value || '500', 10);
+    const durationDays = parseInt(durationRow?.value || '30', 10);
+    const perks = perksRow?.value || 'علامة توثيق مدفوعة زرقاء مميزة بجانب الاسم، تميز بصري في المحادثات وقائمة المتواجدين، أولوية في التفاعل ومظهر بارز للحساب';
+    const enabled = enabledRow?.value !== '0';
+
+    const user = queryOne(db, "SELECT coins, is_paid_verified, paid_verified_until FROM users WHERE id = ?", [session.userId]);
+    const isVerified = !!(user?.is_paid_verified && user?.paid_verified_until && new Date(user.paid_verified_until).getTime() > Date.now());
+    const verifiedUntil = user?.paid_verified_until || null;
+    let daysLeft = 0;
+    if (isVerified && verifiedUntil) {
+      daysLeft = Math.max(0, Math.ceil((new Date(verifiedUntil).getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+    }
+
+    return res.json({
+      price,
+      durationDays,
+      perks,
+      enabled,
+      isUserVerified: isVerified,
+      verifiedUntil,
+      daysLeft,
+      userCoins: user?.coins || 0
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'خطأ في جلب بيانات منتج التوثيق' });
+  }
+});
+
+// Buy or Renew Paid Verification Badge (Server-side Balance Check & Deduction)
+app.post('/api/shop/verification/buy', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    if (session.isGuest) {
+      return res.status(403).json({ error: 'عذراً، شراء علامة التوثيق متاح فقط للحسابات المسجلة.' });
+    }
+
+    const db = await getDb();
+    const enabledRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_enabled'");
+    if (enabledRow?.value === '0') {
+      return res.status(400).json({ error: 'شراء علامة التوثيق معطل مؤقتاً من قِبل إدارة المنصة' });
+    }
+
+    const priceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_price_coins'");
+    const durationRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_duration_days'");
+    const price = parseInt(priceRow?.value || '500', 10);
+    const durationDays = parseInt(durationRow?.value || '30', 10);
+
+    const user = queryOne(db, "SELECT coins, is_paid_verified, paid_verified_until FROM users WHERE id = ?", [session.userId]);
+    if (!user || user.coins < price) {
+      return res.status(400).json({
+        error: `رصيد الكوينز غير كافٍ. سعر الاشتراك: ${price} كوينز (رصيدك الحالي: ${user?.coins || 0} كوينز).`
+      });
+    }
+
+    // Determine new expiration: extend from current if still active, or start fresh from now
+    const now = Date.now();
+    let baseTime = now;
+    if (user.is_paid_verified && user.paid_verified_until && new Date(user.paid_verified_until).getTime() > now) {
+      baseTime = new Date(user.paid_verified_until).getTime();
+    }
+    const newExpiresAt = new Date(baseTime + durationDays * 24 * 3600 * 1000).toISOString();
+
+    db.run("BEGIN TRANSACTION");
+    let txRes;
+    try {
+      txRes = executeWalletTransaction(db, {
+        userId: session.userId,
+        amount: -price,
+        type: 'shop_purchase',
+        description: `شراء/تجديد اشتراك علامة التوثيق المدفوعة (${durationDays} يوم)`
+      });
+
+      db.run(
+        "UPDATE users SET is_paid_verified = 1, paid_verified_until = ? WHERE id = ?",
+        [newExpiresAt, session.userId]
+      );
+
+      db.run(
+        "INSERT OR IGNORE INTO user_badges (user_id, badge_key, badge_name, badge_icon, badge_description) VALUES (?, 'paid_verified', 'موثّق (اشتراك)', '✔️', 'علامة توثيق مدفوعة مميزة')",
+        [session.userId]
+      );
+
+      db.run("COMMIT");
+    } catch (txErr) {
+      db.run("ROLLBACK");
+      throw txErr;
+    }
+
+    saveDb();
+    broadcastOnlineStatus(session.userId, true);
+
+    const daysLeft = Math.max(0, Math.ceil((new Date(newExpiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+
+    return res.json({
+      success: true,
+      message: `تهانينا! تم تفعيل علامة التوثيق المدفوعة بنجاح لمدة ${durationDays} يوماً!`,
+      isUserVerified: true,
+      verifiedUntil: newExpiresAt,
+      daysLeft,
+      newBalance: txRes.balanceAfter
+    });
+  } catch (error: any) {
+    console.error('Verification purchase error:', error);
+    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء شراء علامة التوثيق' });
+  }
+});
+
+// Admin Owner Only: Get Verification Settings
+app.get('/api/admin/verification-settings', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const priceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_price_coins'");
+    const durationRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_duration_days'");
+    const perksRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_perks'");
+    const enabledRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_enabled'");
+
+    return res.json({
+      price: parseInt(priceRow?.value || '500', 10),
+      durationDays: parseInt(durationRow?.value || '30', 10),
+      perks: perksRow?.value || 'علامة توثيق مدفوعة زرقاء مميزة بجانب الاسم، تميز بصري في المحادثات وقائمة المتواجدين، أولوية في التفاعل ومظهر بارز للحساب',
+      enabled: enabledRow?.value !== '0'
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'خطأ في جلب إعدادات التوثيق' });
+  }
+});
+
+// Admin Owner Only: Update Verification Settings
+app.post('/api/admin/verification-settings', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const { price, durationDays, perks, enabled } = req.body;
+
+    if (price !== undefined && !isNaN(parseInt(price, 10))) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_price_coins', ?)", [String(Math.max(1, parseInt(price, 10)))]);
+    }
+    if (durationDays !== undefined && !isNaN(parseInt(durationDays, 10))) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_duration_days', ?)", [String(Math.max(1, parseInt(durationDays, 10)))]);
+    }
+    if (perks !== undefined) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_perks', ?)", [String(perks).trim()]);
+    }
+    if (enabled !== undefined) {
+      db.run("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('verification_enabled', ?)", [enabled ? '1' : '0']);
+    }
+
+    saveDb();
+
+    return res.json({
+      success: true,
+      message: 'تم حفظ إعدادات علامة التوثيق بنجاح',
+      price: parseInt(queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_price_coins'")?.value || '500', 10),
+      durationDays: parseInt(queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_duration_days'")?.value || '30', 10),
+      perks: queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_perks'")?.value,
+      enabled: queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_enabled'")?.value !== '0'
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'خطأ في حفظ إعدادات التوثيق' });
   }
 });
 

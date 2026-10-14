@@ -27,7 +27,7 @@ import { ShopItem, UserInventoryItem, CoinPackage } from '../types';
 export const ShopPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
   const token = getToken();
-  const [activeTab, setActiveTab] = useState<'badges' | 'features' | 'memberships' | 'coins' | 'inventory' | 'admin'>('badges');
+  const [activeTab, setActiveTab] = useState<'badges' | 'features' | 'memberships' | 'coins' | 'inventory' | 'admin' | 'verification'>('badges');
   const [items, setItems] = useState<ShopItem[]>([]);
   const [inventory, setInventory] = useState<UserInventoryItem[]>([]);
   const [vipPlans, setVipPlans] = useState<any[]>([]);
@@ -40,6 +40,26 @@ export const ShopPage: React.FC = () => {
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [paymentInfoModalOpen, setPaymentInfoModalOpen] = useState(false);
   const [selectedPkgForInfo, setSelectedPkgForInfo] = useState<CoinPackage | null>(null);
+
+  // Paid Verification Product State
+  const [verificationData, setVerificationData] = useState<{
+    price: number;
+    durationDays: number;
+    perks: string;
+    enabled: boolean;
+    isUserVerified: boolean;
+    verifiedUntil: string | null;
+    daysLeft: number;
+  }>({
+    price: 500,
+    durationDays: 30,
+    perks: 'علامة توثيق مدفوعة زرقاء مميزة بجانب الاسم، تميز بصري في المحادثات وقائمة المتواجدين، أولوية في التفاعل ومظهر بارز للحساب',
+    enabled: true,
+    isUserVerified: false,
+    verifiedUntil: null,
+    daysLeft: 0
+  });
+  const [purchasingVerification, setPurchasingVerification] = useState(false);
 
   // Owner state (Shop management is strictly Owner only)
   const isOwner = user?.role === 'owner';
@@ -66,11 +86,12 @@ export const ShopPage: React.FC = () => {
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const [resCatalog, resInv, resVip, resCoins] = await Promise.all([
+      const [resCatalog, resInv, resVip, resCoins, resVerif] = await Promise.all([
         fetch('/api/shop/items', { headers }),
         token && !user?.isGuest ? fetch('/api/shop/my-inventory', { headers }) : Promise.resolve(null),
         fetch('/api/vip/plans'),
-        fetch('/api/coins/packages')
+        fetch('/api/coins/packages'),
+        token ? fetch('/api/shop/verification', { headers }) : Promise.resolve(null)
       ]);
 
       if (resCatalog.ok) {
@@ -92,6 +113,11 @@ export const ShopPage: React.FC = () => {
         const coinData = await resCoins.json();
         setCoinPackages(coinData.packages || []);
       }
+
+      if (resVerif && resVerif.ok) {
+        const verifData = await resVerif.json();
+        setVerificationData(verifData);
+      }
     } catch (err) {
       console.error('Failed to load shop items', err);
     } finally {
@@ -99,6 +125,42 @@ export const ShopPage: React.FC = () => {
     }
   };
 
+  const handleBuyVerification = async () => {
+    if (!token) return;
+    if (user?.isGuest) {
+      setMessage({ text: 'يرجى تسجيل حساب أولاً لشراء علامة التوثيق', type: 'error' });
+      return;
+    }
+    if ((user?.coins || 0) < verificationData.price) {
+      setMessage({
+        text: `رصيد الكوينز غير كافٍ. تحتاج إلى ${verificationData.price} كوينز (رصيدك الحالي: ${user?.coins || 0} كوينز).`,
+        type: 'error'
+      });
+      return;
+    }
+
+    try {
+      setPurchasingVerification(true);
+      const res = await fetch('/api/shop/verification/buy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMessage({ text: data.message || 'تم تفعيل علامة التوثيق بنجاح!', type: 'success' });
+        await Promise.all([fetchShopData(), refreshUser()]);
+      } else {
+        setMessage({ text: data.error || 'فشلت عملية شراء علامة التوثيق', type: 'error' });
+      }
+    } catch (e: any) {
+      setMessage({ text: e.message || 'حدث خطأ أثناء الشراء', type: 'error' });
+    } finally {
+      setPurchasingVerification(false);
+    }
+  };
 
   useEffect(() => {
     fetchShopData();
@@ -407,6 +469,22 @@ export const ShopPage: React.FC = () => {
           >
             <Crown className="w-4 h-4 text-amber-400" />
             <span>العضويات</span>
+          </button>
+
+          {/* Section: Verification */}
+          <button
+            onClick={() => setActiveTab('verification')}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer shrink-0 active:scale-95 ${
+              activeTab === 'verification'
+                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 shadow-sm'
+                : 'bg-neutral-900/60 text-neutral-400 hover:text-white border border-neutral-800'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4 text-sky-400" />
+            <span>علامة التوثيق</span>
+            {verificationData.isUserVerified && (
+              <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+            )}
           </button>
 
           {/* Inventory */}
@@ -967,6 +1045,147 @@ export const ShopPage: React.FC = () => {
             <div>
               <strong className="text-white">أمان وضمان المعاملات:</strong> كافة عمليات الشراء تتم وتُحسب بدقة على الخادم عبر رصيد الكوينز الحقيقي. العضويات مخصصة للمظهر والامتيازات الاجتماعية المميزة ولا تمنح صلاحيات إدارية (Admin/Moderator).
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* VERIFICATION PRODUCT VIEW */}
+      {activeTab === 'verification' && (
+        <div className="space-y-6">
+          {/* Main Hero Card for Paid Verification */}
+          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#0c1c2e] via-neutral-900 to-[#0a111a] border border-sky-500/40 p-6 sm:p-8 md:p-10 shadow-2xl">
+            <div className="absolute top-0 right-0 w-80 h-80 bg-sky-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+              <div className="space-y-3 max-w-2xl">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/15 border border-sky-500/40 text-sky-300 text-xs font-bold">
+                  <CheckCircle2 className="w-4 h-4 fill-sky-400 text-neutral-950" />
+                  <span>منتج مميز — علامة التوثيق (اشتراك مدفوع)</span>
+                </div>
+
+                <h2 className="text-2xl sm:text-3xl font-black text-white font-cairo flex items-center gap-2">
+                  <span>علامة التوثيق الزرقاء بحسابك</span>
+                  <CheckCircle2 className="w-7 h-7 fill-sky-400 text-[#0c1c2e] shrink-0" />
+                </h2>
+
+                <p className="text-neutral-300 text-xs sm:text-sm leading-relaxed">
+                  امنح حسابك طابعاً حصرياً ومظهراً موثوقاً داخل مجتمع فضفضه. تظهر علامة التوثيق الزرقاء بجانب اسمك في المحادثات وقوائم المتواجدين والغرف وملفك الشخصي طوال فترة سريان الاشتراك.
+                </p>
+
+                {/* Status Box */}
+                {verificationData.isUserVerified ? (
+                  <div className="p-3.5 rounded-2xl bg-sky-950/80 border border-sky-500/60 text-sky-200 text-xs flex items-center gap-2.5">
+                    <CheckCircle2 className="w-5 h-5 fill-sky-400 text-neutral-950 shrink-0" />
+                    <div>
+                      <span className="font-bold text-white">حسابك موثّق حالياً! </span>
+                      <span>
+                        متبقي على انتهاء الصلاحية: <strong className="text-sky-300 font-mono">{verificationData.daysLeft} يوم</strong>
+                        {verificationData.verifiedUntil && (
+                          <span className="text-[11px] text-neutral-400 block sm:inline sm:mr-1">
+                            (حتى {new Date(verificationData.verifiedUntil).toLocaleDateString('ar-EG')})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-2xl bg-neutral-900/80 border border-neutral-800 text-neutral-400 text-xs flex items-center gap-2.5">
+                    <Clock className="w-4 h-4 text-neutral-500 shrink-0" />
+                    <span>حسابك غير موثّق حالياً. يمكنك اقتناء علامة التوثيق مباشرة بالكوينز أدناه.</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Price & Action Widget */}
+              <div className="w-full md:w-72 p-5 rounded-2xl bg-black/60 border border-sky-500/30 flex flex-col justify-between space-y-4 shrink-0 shadow-xl">
+                <div>
+                  <span className="text-[11px] text-neutral-400 font-tajawal block">سعر الاشتراك</span>
+                  <div className="flex items-baseline gap-1.5 mt-1">
+                    <span className="font-cairo font-black text-3xl text-sky-300">
+                      {verificationData.price}
+                    </span>
+                    <span className="text-xs text-neutral-400 font-tajawal">كوينز</span>
+                  </div>
+                  <div className="text-[11px] text-neutral-400 mt-1 flex items-center gap-1 font-tajawal">
+                    <Clock className="w-3.5 h-3.5 text-sky-400" />
+                    <span>مدة الصلاحية: <strong>{verificationData.durationDays} يوماً</strong></span>
+                  </div>
+                  <div className="text-[11px] text-amber-400 mt-1 font-mono">
+                    رصيدك: {user?.isGuest ? '0 (زائر)' : `${user?.coins || 0} كوينز`}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={purchasingVerification || user?.isGuest || !verificationData.enabled}
+                  onClick={handleBuyVerification}
+                  className={`w-full py-3 px-4 rounded-xl font-cairo font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 ${
+                    user?.isGuest
+                      ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
+                      : (user?.coins || 0) < verificationData.price
+                      ? 'bg-neutral-800 text-amber-300 border border-amber-800/50 hover:bg-neutral-750'
+                      : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white shadow-sky-500/25'
+                  }`}
+                >
+                  {purchasingVerification ? (
+                    <span>جاري التحقق والخصم...</span>
+                  ) : verificationData.isUserVerified ? (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      <span>تجديد اشتراك التوثيق (+{verificationData.durationDays} يوم)</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 fill-white text-blue-600" />
+                      <span>شراء علامة التوثيق الآن</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Perks Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-5 rounded-2xl bg-neutral-900/70 border border-neutral-800 space-y-2">
+              <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400">
+                <CheckCircle2 className="w-5 h-5 fill-sky-400 text-neutral-950" />
+              </div>
+              <h3 className="font-cairo font-bold text-sm text-white">شارة زرقاء رسمية بجانب اسمك</h3>
+              <p className="text-xs text-neutral-400 font-tajawal leading-relaxed">
+                تظهر علامة التوثيق بجانب اسمك في بروفايلك، الرسائل الخاصة، غرف الشات، والرومات الصوتية والمرئية.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-neutral-900/70 border border-neutral-800 space-y-2">
+              <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <h3 className="font-cairo font-bold text-sm text-white">حضور ملفت في قائمة المتواجدين</h3>
+              <p className="text-xs text-neutral-400 font-tajawal leading-relaxed">
+                تمييز بصري لبطاقة حسابك يلفت انتباه باقي الأعضاء ويسهل التعرف على مشاركاتك داخل المجتمع.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-neutral-900/70 border border-neutral-800 space-y-2">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <RefreshCw className="w-5 h-5" />
+              </div>
+              <h3 className="font-cairo font-bold text-sm text-white">إمكانية التجديد التلقائي والمستمر</h3>
+              <p className="text-xs text-neutral-400 font-tajawal leading-relaxed">
+                يمكنك تجديد الاشتراك في أي وقت لتمديد فترة صلاحية التوثيق وإضافة أيام جديدة دون انقطاع.
+              </p>
+            </div>
+          </div>
+
+          {/* Mandatory Transparent Disclaimer as Requested by User */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-amber-950/30 border border-amber-600/40 text-amber-200 text-xs leading-relaxed space-y-1.5 font-tajawal">
+            <div className="flex items-center gap-2 font-bold text-amber-300">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>إشعار الشفافية والوضوح (علامة توثيق مدفوعة):</span>
+            </div>
+            <p className="text-neutral-300">
+              هذه العلامة هي منتج اشتراك مدفوع داخل منصة فضفضه يهدف إلى منح الحساب تميزاً شكلياً وجمالياً ودعم المنصة، ولا تعني أو توحي بأي شكل من الأشكال بأنها تحقق رسمي من الهوية الشخصية أو الحكومية لحامل الحساب، التزاماً بمبدأ الشفافية ومصداقية المجتمع.
+            </p>
           </div>
         </div>
       )}
