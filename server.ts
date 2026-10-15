@@ -85,7 +85,8 @@ function setAuthCookie(res: Response, token: string) {
   try {
     res.cookie('auth_token', token, {
       httpOnly: false,
-      sameSite: 'lax',
+      sameSite: 'none',
+      secure: true,
       path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000
     });
@@ -120,8 +121,15 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
       return res.sendFile(filePath);
     }
 
-    // 2. Stories Media Authorization
-    const story = queryOne(db, "SELECT id, user_id, expires_at FROM stories WHERE media_url = ?", [fileUrl]);
+    // 2. Stories Media Authorization (Strictly Enforced)
+    const story = queryOne(
+      db,
+      `SELECT s.id, s.user_id, s.expires_at, u.privacy_story_visibility
+       FROM stories s
+       JOIN users u ON s.user_id = u.id
+       WHERE s.media_url = ?`,
+      [fileUrl]
+    );
     if (story) {
       if (!session) {
         return res.status(401).json({ error: 'الرجاء تسجيل الدخول أولاً لمشاهدة محتوى القصص' });
@@ -137,7 +145,19 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
       if (isBlocked) {
         return res.status(403).json({ error: 'غير مصرح بالوصول إلى وسائط هذا المستخدم' });
       }
+      // Check privacy setting of the user if friends only
+      if (story.privacy_story_visibility === 'friends' && story.user_id !== session.userId && session.role !== 'owner' && session.role !== 'admin') {
+        const isFriend = queryOne(
+          db,
+          "SELECT id FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)",
+          [session.userId, story.user_id, story.user_id, session.userId]
+        );
+        if (!isFriend) {
+          return res.status(403).json({ error: 'هذه القصة مخصصة للأصدقاء فقط' });
+        }
+      }
       res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Accept-Ranges', 'bytes');
       return res.sendFile(filePath);
     }
 
@@ -1118,48 +1138,43 @@ app.post('/api/auth/register', registerRateLimiter, async (req: Request, res: Re
     );
     db.run("UPDATE users SET terms_agreed = 1, terms_agreed_at = CURRENT_TIMESTAMP, terms_version = '1.0' WHERE id = ?", [userId]);
 
-    // Create session token
-    const token = createSession(db, userId);
-    setAuthCookie(res, token);
-
-    // Initial welcome notification
-    const notifId = 'notif_' + Math.random().toString(36).substring(2, 9);
-    db.run(
-      `INSERT INTO notifications (id, user_id, type, title, body, link)
-       VALUES (?, ?, 'welcome', 'مرحباً بك في فضفضه! 🌹', 'يسعدنا انضمامك إلى مجتمع فضفضه. يرجى تأكيد بريدك الإلكتروني لتفعيل كامل الميزات.', '/profile')`,
-      [notifId, userId]
-    );
-
-    saveDb();
-
     // Dispatch real email verification
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
     const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
     const baseUrl = process.env.APP_URL || `${protocol}://${host}`;
     const vfyRes = await createAndSendVerification(db, userId, cleanEmail, trimmedUsername, baseUrl);
 
+    // CRITICAL: Check actual sending success! Never return a success message if email sending failed!
+    if (!vfyRes.success) {
+      // Rollback user record so they can correct their email or try again
+      db.run("DELETE FROM users WHERE id = ?", [userId]);
+      db.run("DELETE FROM user_interests WHERE user_id = ?", [userId]);
+      db.run("DELETE FROM terms_agreements WHERE user_id = ?", [userId]);
+      saveDb();
+
+      return res.status(400).json({
+        error: vfyRes.error || 'فشل إرسال رسالة تأكيد الحساب إلى بريدك الإلكتروني. يرجى التأكد من صحة البريد والمحاولة مرة أخرى.'
+      });
+    }
+
+    // Initial welcome notification (ready for when they verify)
+    const notifId = 'notif_' + Math.random().toString(36).substring(2, 9);
+    db.run(
+      `INSERT INTO notifications (id, user_id, type, title, body, link)
+       VALUES (?, ?, 'welcome', 'مرحباً بك في فضفضه! 🌹', 'يسعدنا انضمامك إلى مجتمع فضفضه. تم تأكيد بريدك الإلكتروني وتفعيل الحساب بالكامل.', '/profile')`,
+      [notifId, userId]
+    );
+
+    saveDb();
+
+    // CRITICAL: A new account MUST remain unable to log in until email confirmation is complete!
+    // Do NOT issue a session token or set auth cookie here.
     return res.json({
       success: true,
-      token,
       requireEmailVerification: true,
-      user: {
-        id: userId,
-        username: trimmedUsername,
-        email: cleanEmail,
-        emailVerified: false,
-        emailVerifiedAt: null,
-        role,
-        gender,
-        country: finalCountry,
-        countryCode: finalCountryCode,
-        detectedCountry: detectedGeo.country,
-        bio: bio || '',
-        level: 1,
-        coins: 150,
-        streak: 1,
-        vipLevel: 'none',
-        isGuest: false
-      }
+      email: cleanEmail,
+      username: trimmedUsername,
+      message: `تم إنشاء حسابك بنجاح! تم إرسال كود التأكيد ورابط التفعيل إلى بريدك (${cleanEmail}) من «فضفضه». يرجى مراجعة صندوق الوارد ورسائل غير المرغوب فيها (Spam) لتأكيد الحساب قبل تسجيل الدخول.`
     });
   } catch (error: any) {
     console.error('Register error:', error);
@@ -1195,6 +1210,17 @@ app.post('/api/auth/login', loginRateLimiter, async (req: Request, res: Response
     const valid = verifyPassword(password, user.password_hash, user.salt);
     if (!valid) {
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+    }
+
+    // MANDATORY REQUIREMENT: New accounts MUST remain unable to log in until email confirmation is complete!
+    const isOwnerUser = user.role === 'owner' || user.username?.toLowerCase() === 'hegazy';
+    if (!isOwnerUser && user.email_verified !== 1) {
+      return res.status(403).json({
+        error: 'حسابك غير مفعّل بعد. يجب تأكيد بريدك الإلكتروني أولاً لتتمكن من تسجيل الدخول إلى منصة فضفضه.',
+        requireEmailVerification: true,
+        email: user.email,
+        username: user.username
+      });
     }
 
     // Check daily streak and award login XP/coins
@@ -1240,21 +1266,22 @@ app.get('/api/auth/verify-email', async (req: Request, res: Response) => {
   try {
     const token = (req.query.token as string || '').trim();
     if (!token) {
-      return res.redirect('/verify-email?status=error&message=' + encodeURIComponent('رمز التحقق مفقود'));
+      return res.redirect('/?status=verify_error&message=' + encodeURIComponent('رمز التحقق مفقود'));
     }
 
     const db = await getDb();
     const result = verifyTokenOrCode(db, token);
 
     if (result.success && result.user) {
-      // Send realtime notification or update if active
-      return res.redirect(`/verify-email?status=success&username=${encodeURIComponent(result.user.username)}`);
+      const sessionToken = createSession(db, result.user.id);
+      setAuthCookie(res, sessionToken);
+      return res.redirect(`/?status=verified_success&username=${encodeURIComponent(result.user.username)}`);
     } else {
-      return res.redirect(`/verify-email?status=error&message=${encodeURIComponent(result.error || 'رمز التحقق غير صالح أو منتهي')}`);
+      return res.redirect(`/?status=verify_error&message=${encodeURIComponent(result.error || 'رمز التحقق غير صالح أو منتهي')}`);
     }
   } catch (error: any) {
     console.error('Email verification error:', error);
-    return res.redirect('/verify-email?status=error&message=' + encodeURIComponent('تعذر التحقق من البريد'));
+    return res.redirect('/?status=verify_error&message=' + encodeURIComponent('تعذر التحقق من البريد'));
   }
 });
 
@@ -1271,14 +1298,26 @@ app.post('/api/auth/verify-email', emailVerifyRateLimiter, async (req: Request, 
     const db = await getDb();
     const result = verifyTokenOrCode(db, input);
 
-    if (!result.success) {
-      return res.status(400).json({ error: result.error });
+    if (!result.success || !result.user) {
+      return res.status(400).json({ error: result.error || 'رمز التحقق غير صالح أو انتهت صلاحيته' });
     }
+
+    // Email is now verified! Issue active session token so user logs in seamlessly
+    const sessionToken = createSession(db, result.user.id);
+    setAuthCookie(res, sessionToken);
 
     return res.json({
       success: true,
-      message: 'تم تأكيد البريد الإلكتروني بنجاح! حسابك مفعّل بالكامل الآن 🌟',
-      user: result.user
+      message: 'تم تأكيد البريد الإلكتروني بنجاح! تم تفعيل حسابك ويمكنك الدخول الآن 🌟',
+      token: sessionToken,
+      user: {
+        id: result.user.id,
+        username: result.user.username,
+        email: result.user.email,
+        emailVerified: true,
+        emailVerifiedAt: result.user.emailVerifiedAt,
+        role: result.user.role
+      }
     });
   } catch (error) {
     console.error('Verify email POST error:', error);
@@ -1328,12 +1367,12 @@ app.post('/api/auth/resend-verification', emailVerifyRateLimiter, async (req: Re
 
     const sendRes = await createAndSendVerification(db, targetUser.id, targetUser.email, targetUser.username, baseUrl);
     if (!sendRes.success) {
-      return res.status(500).json({ error: 'تعذر إرسال رسالة التحقق، يرجى المحاولة لاحقاً' });
+      return res.status(400).json({ error: sendRes.error || 'تعذر إرسال رسالة التحقق، يرجى المحاولة لاحقاً' });
     }
 
     return res.json({
       success: true,
-      message: `تم إرسال رسالة تحقق جديدة إلى البريد الإلكتروني (${targetUser.email}) بنجاح.`
+      message: `تم إرسال كود ورابط التحقق الجديد إلى البريد (${targetUser.email}) بنجاح من «فضفضه».`
     });
   } catch (error) {
     console.error('Resend verification error:', error);
@@ -4388,7 +4427,7 @@ app.get('/api/stories', requireAuth, async (req: Request, res: Response) => {
               (SELECT COUNT(*) FROM story_views WHERE story_id = s.id) as view_count
        FROM stories s
        JOIN users u ON s.user_id = u.id
-       WHERE s.expires_at > CURRENT_TIMESTAMP
+       WHERE datetime(s.expires_at) > datetime('now')
          AND s.user_id NOT IN (SELECT blocked_user_id FROM blocks WHERE user_id = ?)
          AND s.user_id NOT IN (SELECT user_id FROM blocks WHERE blocked_user_id = ?)
        ORDER BY s.created_at DESC`,
@@ -4793,7 +4832,7 @@ app.get('/api/wallet', requireAuth, async (req: Request, res: Response) => {
 app.get('/api/gifts', requireAuth, async (req: Request, res: Response) => {
   try {
     const db = await getDb();
-    const gifts = queryAll(db, "SELECT * FROM gifts ORDER BY price_coins ASC");
+    const gifts = queryAll(db, "SELECT * FROM gifts WHERE is_active != 0 ORDER BY display_order ASC, price_coins ASC");
     return res.json({ gifts });
   } catch (error) {
     return res.status(500).json({ error: 'خطأ في جلب الهدايا' });
@@ -7962,6 +8001,588 @@ app.post('/api/admin/verification-settings', requireAuth, requireOwner, async (r
     });
   } catch (error) {
     return res.status(500).json({ error: 'خطأ في حفظ إعدادات التوثيق' });
+  }
+});
+
+// ==========================================
+// UNIFIED OWNER STORE MANAGEMENT (لوحة المالك لإدارة المتجر بالكامل)
+// All types: Badges, Features, Frames, VIP Plans, Gifts, Coin Packages, Verification
+// Strictly protected with requireAuth & requireOwner on the server side
+// ==========================================
+
+// 1. Get All Store Items Across All Sections (Owner Only - Includes Inactive/Archived)
+app.get('/api/admin/store/all', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+
+    // Badges & Digital Features
+    const shopItemsRows = queryAll(db, "SELECT * FROM shop_items ORDER BY display_order ASC, created_at DESC");
+    const badgesAndFeatures = shopItemsRows.map(item => {
+      let meta: any = {};
+      try { meta = JSON.parse(item.metadata_json || '{}'); } catch {}
+      return {
+        id: item.id,
+        section: item.type === 'badge' ? 'badges' : 'features',
+        name: item.name,
+        description: item.description || '',
+        icon: item.icon || '⭐',
+        imageUrl: item.image_url || '',
+        price: item.price_coins,
+        currency: 'coins',
+        type: item.type,
+        category: item.category || 'distinctive',
+        duration: item.duration_hours,
+        durationUnit: 'hours',
+        isActive: item.is_active === 1,
+        displayOrder: item.display_order || 0,
+        metadata: meta
+      };
+    });
+
+    // VIP Membership Plans
+    const vipRows = queryAll(db, "SELECT * FROM vip_plans ORDER BY display_order ASC, price_coins ASC");
+    const vipPlans = vipRows.map(r => {
+      let perks: string[] = [];
+      try { perks = JSON.parse(r.perks_json || '[]'); } catch {}
+      return {
+        id: r.id,
+        section: 'vip_plans',
+        name: r.name,
+        description: `باقة عضوية VIP لمدة ${r.days} يوماً تشمل امتيازات وخصائص حصرية`,
+        icon: r.icon || '👑',
+        imageUrl: r.image_url || '',
+        badge: r.badge,
+        color: r.color,
+        border: r.border,
+        textColor: r.text_color,
+        price: r.price_coins,
+        currency: 'coins',
+        duration: r.days,
+        durationUnit: 'days',
+        popular: r.popular === 1,
+        isActive: r.is_active === 1,
+        displayOrder: r.display_order || 0,
+        perks
+      };
+    });
+
+    // Interactive Gifts
+    const giftRows = queryAll(db, "SELECT * FROM gifts ORDER BY display_order ASC, price_coins ASC");
+    const gifts = giftRows.map(g => ({
+      id: g.id,
+      section: 'gifts',
+      name: g.arabic_name || g.name,
+      englishName: g.name,
+      description: g.description || `هدية تفاعلية تعبر عن التقدير داخل الغرف والمحادثات`,
+      icon: g.icon || '🎁',
+      imageUrl: g.image_url || '',
+      price: g.price_coins,
+      currency: 'coins',
+      category: g.category || 'popular',
+      animation: g.animation || 'bounce',
+      isActive: g.is_active !== 0,
+      displayOrder: g.display_order || 0
+    }));
+
+    // Coin Recharge Packages
+    const coinRows = queryAll(db, "SELECT * FROM coin_packages ORDER BY display_order ASC, price_amount ASC");
+    const coinPackages = coinRows.map(cp => ({
+      id: cp.id,
+      section: 'coin_packages',
+      name: cp.name,
+      coins: cp.coins,
+      bonusCoins: cp.bonus_coins || 0,
+      description: `باقة ${cp.coins} كوينز ${cp.bonus_coins ? `+ ${cp.bonus_coins} كوينز مجانية هدية` : ''}`,
+      icon: cp.icon || '🪙',
+      imageUrl: cp.image_url || '',
+      price: cp.price_amount,
+      currency: cp.currency || 'EGP',
+      color: cp.color || 'from-amber-600 to-amber-900',
+      badge: cp.badge || '',
+      popular: cp.popular === 1,
+      isActive: cp.is_active === 1,
+      displayOrder: cp.display_order || 0
+    }));
+
+    // Verification Badge Settings
+    const priceRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_price_coins'");
+    const durationRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_duration_days'");
+    const perksRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_perks'");
+    const enabledRow = queryOne(db, "SELECT value FROM system_settings WHERE key = 'verification_enabled'");
+    const verification = {
+      section: 'verification',
+      id: 'verification_badge_product',
+      name: 'علامة التوثيق باشتراك مدفوع',
+      description: 'علامة توثيق زرقاء رسمية تميز الحساب وتمنحه مظهراً راقياً وموثوقاً',
+      icon: '🛡️',
+      price: parseInt(priceRow?.value || '500', 10),
+      currency: 'coins',
+      duration: parseInt(durationRow?.value || '30', 10),
+      durationUnit: 'days',
+      perks: perksRow?.value || 'علامة زرقاء بجانب الاسم، تميز بصري في المحادثات وقائمة المتواجدين، أولوية في التفاعل ومظهر بارز للحساب',
+      isActive: enabledRow?.value !== '0',
+      displayOrder: 0
+    };
+
+    return res.json({
+      success: true,
+      items: [
+        ...badgesAndFeatures,
+        ...vipPlans,
+        ...gifts,
+        ...coinPackages
+      ],
+      verification,
+      counts: {
+        total: badgesAndFeatures.length + vipPlans.length + gifts.length + coinPackages.length + 1,
+        badges: badgesAndFeatures.filter(i => i.section === 'badges').length,
+        features: badgesAndFeatures.filter(i => i.section === 'features').length,
+        vip: vipPlans.length,
+        gifts: gifts.length,
+        coins: coinPackages.length
+      }
+    });
+  } catch (error) {
+    console.error('Fetch admin store error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب بيانات إدارة المتجر' });
+  }
+});
+
+// 2. Add New Store Item (Owner Only)
+app.post('/api/admin/store/items', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const {
+      section,
+      name,
+      description,
+      icon,
+      imageUrl,
+      price,
+      currency,
+      duration,
+      category,
+      displayOrder,
+      isActive,
+      perks,
+      metadata,
+      badge,
+      color,
+      coins,
+      bonusCoins,
+      popular
+    } = req.body;
+
+    if (!name || !section) {
+      return res.status(400).json({ error: 'يرجى إدخال اسم المنتج وتحديد نوعه' });
+    }
+
+    const db = await getDb();
+    const cleanName = name.trim();
+    const orderNum = displayOrder !== undefined ? parseInt(displayOrder, 10) : 0;
+    const activeVal = isActive === false ? 0 : 1;
+    let createdId = '';
+
+    db.run("BEGIN TRANSACTION");
+    try {
+      if (section === 'badges' || section === 'features') {
+        const itemType = section === 'badges' ? 'badge' : (req.body.type || 'card_frame');
+        createdId = 'shop_' + itemType + '_' + Date.now();
+        db.run(
+          `INSERT INTO shop_items (
+            id, name, description, icon, image_url, price_coins, type, category,
+            duration_hours, display_order, is_active, metadata_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            createdId,
+            cleanName,
+            description || '',
+            icon || '⭐',
+            imageUrl || '',
+            Math.max(0, parseInt(price || '100', 10)),
+            itemType,
+            category || 'distinctive',
+            duration ? parseInt(duration, 10) : null,
+            orderNum,
+            activeVal,
+            JSON.stringify(metadata || {})
+          ]
+        );
+      } else if (section === 'vip_plans') {
+        createdId = (req.body.id || ('vip_' + Date.now())).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const perksJson = Array.isArray(perks) ? JSON.stringify(perks) : JSON.stringify([perks || 'ميزات حصرية']);
+        db.run(
+          `INSERT INTO vip_plans (
+            id, name, icon, image_url, badge, color, border, text_color,
+            price_coins, days, popular, is_active, perks_json, display_order
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            createdId,
+            cleanName,
+            icon || '👑',
+            imageUrl || '',
+            badge || 'VIP',
+            color || 'from-amber-600 to-amber-900',
+            req.body.border || 'border-amber-500/40',
+            req.body.textColor || 'text-amber-400',
+            Math.max(1, parseInt(price || '200', 10)),
+            Math.max(1, parseInt(duration || '30', 10)),
+            popular ? 1 : 0,
+            activeVal,
+            perksJson,
+            orderNum
+          ]
+        );
+      } else if (section === 'gifts') {
+        createdId = 'gift_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        db.run(
+          `INSERT INTO gifts (
+            id, name, arabic_name, icon, image_url, price_coins, category,
+            animation, description, is_active, display_order
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            createdId,
+            req.body.englishName || cleanName,
+            cleanName,
+            icon || '🎁',
+            imageUrl || '',
+            Math.max(1, parseInt(price || '50', 10)),
+            category || 'popular',
+            req.body.animation || 'bounce',
+            description || '',
+            activeVal,
+            orderNum
+          ]
+        );
+      } else if (section === 'coin_packages') {
+        createdId = (req.body.id || ('pkg_' + Date.now())).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        db.run(
+          `INSERT INTO coin_packages (
+            id, name, coins, bonus_coins, price_amount, currency, icon, image_url,
+            badge, color, popular, is_active, display_order
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            createdId,
+            cleanName,
+            Math.max(1, parseInt(coins || price || '100', 10)),
+            Math.max(0, parseInt(bonusCoins || '0', 10)),
+            Math.max(1, parseFloat(price || '50')),
+            currency || 'EGP',
+            icon || '🪙',
+            imageUrl || '',
+            badge || '',
+            color || 'from-amber-600 to-amber-900',
+            popular ? 1 : 0,
+            activeVal,
+            orderNum
+          ]
+        );
+      } else {
+        db.run("ROLLBACK");
+        return res.status(400).json({ error: 'قسم المتجر المحدد غير معروف' });
+      }
+
+      db.run("COMMIT");
+    } catch (txErr) {
+      db.run("ROLLBACK");
+      throw txErr;
+    }
+
+    // Log to Audit
+    const auditId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'create_store_item', ?, ?, ?)`,
+      [auditId, session.userId, section, createdId, `إضافة منتج جديد في المتجر (${section}): ${cleanName}`]
+    );
+
+    saveDb();
+    return res.json({ success: true, id: createdId, message: `تمت إضافة منتج «${cleanName}» بنجاح إلى المتجر` });
+  } catch (error: any) {
+    console.error('Add store item error:', error);
+    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء إضافة المنتج للمتجر' });
+  }
+});
+
+// 3. Edit Store Item (Owner Only)
+app.put('/api/admin/store/items/:section/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { section, id } = req.params;
+    const {
+      name,
+      description,
+      icon,
+      imageUrl,
+      price,
+      currency,
+      duration,
+      category,
+      displayOrder,
+      isActive,
+      perks,
+      metadata,
+      badge,
+      color,
+      coins,
+      bonusCoins,
+      popular
+    } = req.body;
+
+    const db = await getDb();
+    db.run("BEGIN TRANSACTION");
+
+    try {
+      if (section === 'badges' || section === 'features') {
+        const existing = queryOne(db, "SELECT * FROM shop_items WHERE id = ?", [id]);
+        if (!existing) {
+          db.run("ROLLBACK");
+          return res.status(404).json({ error: 'العنصر غير موجود في المتجر' });
+        }
+        db.run(
+          `UPDATE shop_items
+           SET name = COALESCE(?, name),
+               description = COALESCE(?, description),
+               icon = COALESCE(?, icon),
+               image_url = COALESCE(?, image_url),
+               price_coins = COALESCE(?, price_coins),
+               duration_hours = ?,
+               category = COALESCE(?, category),
+               display_order = COALESCE(?, display_order),
+               is_active = COALESCE(?, is_active),
+               metadata_json = COALESCE(?, metadata_json)
+           WHERE id = ?`,
+          [
+            name ? name.trim() : null,
+            description !== undefined ? description : null,
+            icon || null,
+            imageUrl !== undefined ? imageUrl : null,
+            price !== undefined ? Math.max(0, parseInt(price, 10)) : null,
+            duration !== undefined ? (duration ? parseInt(duration, 10) : null) : null,
+            category || null,
+            displayOrder !== undefined ? parseInt(displayOrder, 10) : null,
+            isActive !== undefined ? (isActive ? 1 : 0) : null,
+            metadata ? JSON.stringify(metadata) : null,
+            id
+          ]
+        );
+      } else if (section === 'vip_plans') {
+        const existing = queryOne(db, "SELECT * FROM vip_plans WHERE id = ?", [id]);
+        if (!existing) {
+          db.run("ROLLBACK");
+          return res.status(404).json({ error: 'باقة VIP غير موجودة' });
+        }
+        const perksJson = perks ? (Array.isArray(perks) ? JSON.stringify(perks) : JSON.stringify([perks])) : null;
+        db.run(
+          `UPDATE vip_plans
+           SET name = COALESCE(?, name),
+               icon = COALESCE(?, icon),
+               image_url = COALESCE(?, image_url),
+               badge = COALESCE(?, badge),
+               color = COALESCE(?, color),
+               price_coins = COALESCE(?, price_coins),
+               days = COALESCE(?, days),
+               popular = COALESCE(?, popular),
+               is_active = COALESCE(?, is_active),
+               perks_json = COALESCE(?, perks_json),
+               display_order = COALESCE(?, display_order)
+           WHERE id = ?`,
+          [
+            name ? name.trim() : null,
+            icon || null,
+            imageUrl !== undefined ? imageUrl : null,
+            badge || null,
+            color || null,
+            price !== undefined ? Math.max(1, parseInt(price, 10)) : null,
+            duration !== undefined ? Math.max(1, parseInt(duration, 10)) : null,
+            popular !== undefined ? (popular ? 1 : 0) : null,
+            isActive !== undefined ? (isActive ? 1 : 0) : null,
+            perksJson,
+            displayOrder !== undefined ? parseInt(displayOrder, 10) : null,
+            id
+          ]
+        );
+      } else if (section === 'gifts') {
+        const existing = queryOne(db, "SELECT * FROM gifts WHERE id = ?", [id]);
+        if (!existing) {
+          db.run("ROLLBACK");
+          return res.status(404).json({ error: 'الهدية غير موجودة' });
+        }
+        db.run(
+          `UPDATE gifts
+           SET arabic_name = COALESCE(?, arabic_name),
+               name = COALESCE(?, name),
+               icon = COALESCE(?, icon),
+               image_url = COALESCE(?, image_url),
+               price_coins = COALESCE(?, price_coins),
+               category = COALESCE(?, category),
+               description = COALESCE(?, description),
+               is_active = COALESCE(?, is_active),
+               display_order = COALESCE(?, display_order)
+           WHERE id = ?`,
+          [
+            name ? name.trim() : null,
+            req.body.englishName || null,
+            icon || null,
+            imageUrl !== undefined ? imageUrl : null,
+            price !== undefined ? Math.max(1, parseInt(price, 10)) : null,
+            category || null,
+            description !== undefined ? description : null,
+            isActive !== undefined ? (isActive ? 1 : 0) : null,
+            displayOrder !== undefined ? parseInt(displayOrder, 10) : null,
+            id
+          ]
+        );
+      } else if (section === 'coin_packages') {
+        const existing = queryOne(db, "SELECT * FROM coin_packages WHERE id = ?", [id]);
+        if (!existing) {
+          db.run("ROLLBACK");
+          return res.status(404).json({ error: 'باقة الكوينز غير موجودة' });
+        }
+        db.run(
+          `UPDATE coin_packages
+           SET name = COALESCE(?, name),
+               coins = COALESCE(?, coins),
+               bonus_coins = COALESCE(?, bonus_coins),
+               price_amount = COALESCE(?, price_amount),
+               currency = COALESCE(?, currency),
+               icon = COALESCE(?, icon),
+               image_url = COALESCE(?, image_url),
+               badge = COALESCE(?, badge),
+               color = COALESCE(?, color),
+               popular = COALESCE(?, popular),
+               is_active = COALESCE(?, is_active),
+               display_order = COALESCE(?, display_order)
+           WHERE id = ?`,
+          [
+            name ? name.trim() : null,
+            coins !== undefined ? Math.max(1, parseInt(coins, 10)) : null,
+            bonusCoins !== undefined ? Math.max(0, parseInt(bonusCoins, 10)) : null,
+            price !== undefined ? Math.max(1, parseFloat(price)) : null,
+            currency || null,
+            icon || null,
+            imageUrl !== undefined ? imageUrl : null,
+            badge !== undefined ? badge : null,
+            color || null,
+            popular !== undefined ? (popular ? 1 : 0) : null,
+            isActive !== undefined ? (isActive ? 1 : 0) : null,
+            displayOrder !== undefined ? parseInt(displayOrder, 10) : null,
+            id
+          ]
+        );
+      } else {
+        db.run("ROLLBACK");
+        return res.status(400).json({ error: 'قسم غير معروف' });
+      }
+
+      db.run("COMMIT");
+    } catch (txErr) {
+      db.run("ROLLBACK");
+      throw txErr;
+    }
+
+    const auditId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'update_store_item', ?, ?, ?)`,
+      [auditId, session.userId, section, id, `تعديل منتج في المتجر (${section}): ${id}`]
+    );
+
+    saveDb();
+    return res.json({ success: true, message: 'تم تحديث بيانات المنتج بنجاح وتطبيقها في المتجر' });
+  } catch (error: any) {
+    console.error('Update store item error:', error);
+    return res.status(500).json({ error: error.message || 'حدث خطأ أثناء تعديل المنتج' });
+  }
+});
+
+// 4. Toggle Product Visibility (Hide / Show with 1 Click) (Owner Only)
+app.post('/api/admin/store/items/:section/:id/toggle-visibility', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { section, id } = req.params;
+    const db = await getDb();
+    let newStatus = 1;
+
+    if (section === 'badges' || section === 'features') {
+      const row = queryOne(db, "SELECT is_active, name FROM shop_items WHERE id = ?", [id]);
+      if (!row) return res.status(404).json({ error: 'العنصر غير موجود' });
+      newStatus = row.is_active === 1 ? 0 : 1;
+      db.run("UPDATE shop_items SET is_active = ? WHERE id = ?", [newStatus, id]);
+    } else if (section === 'vip_plans') {
+      const row = queryOne(db, "SELECT is_active, name FROM vip_plans WHERE id = ?", [id]);
+      if (!row) return res.status(404).json({ error: 'باقة VIP غير موجودة' });
+      newStatus = row.is_active === 1 ? 0 : 1;
+      db.run("UPDATE vip_plans SET is_active = ? WHERE id = ?", [newStatus, id]);
+    } else if (section === 'gifts') {
+      const row = queryOne(db, "SELECT is_active, arabic_name FROM gifts WHERE id = ?", [id]);
+      if (!row) return res.status(404).json({ error: 'الهدية غير موجودة' });
+      newStatus = (row.is_active !== 0) ? 0 : 1;
+      db.run("UPDATE gifts SET is_active = ? WHERE id = ?", [newStatus, id]);
+    } else if (section === 'coin_packages') {
+      const row = queryOne(db, "SELECT is_active, name FROM coin_packages WHERE id = ?", [id]);
+      if (!row) return res.status(404).json({ error: 'باقة الكوينز غير موجودة' });
+      newStatus = row.is_active === 1 ? 0 : 1;
+      db.run("UPDATE coin_packages SET is_active = ? WHERE id = ?", [newStatus, id]);
+    } else {
+      return res.status(400).json({ error: 'قسم غير معروف' });
+    }
+
+    const auditId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'toggle_store_visibility', ?, ?, ?)`,
+      [auditId, session.userId, section, id, `${newStatus === 1 ? 'إظهار وتفعيل' : 'إخفاء وتعطيل'} منتج بالمتجر: ${id}`]
+    );
+
+    saveDb();
+    return res.json({
+      success: true,
+      isActive: newStatus === 1,
+      message: newStatus === 1 ? 'تم إظهار وتفعيل المنتج في المتجر بنجاح' : 'تم إخفاء المنتج من المتجر وأرشفته'
+    });
+  } catch (error: any) {
+    console.error('Toggle visibility error:', error);
+    return res.status(500).json({ error: error.message || 'خطأ في تغيير حالة المنتج' });
+  }
+});
+
+// 5. Delete / Archive Store Item (Preserves All Past Purchases & User Records) (Owner Only)
+app.delete('/api/admin/store/items/:section/:id', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).user as UserSession;
+    const { section, id } = req.params;
+    const db = await getDb();
+
+    // STRICT SAFETY REQUIREMENT: NEVER delete prior user inventory, purchases, or payment history!
+    // We archive by setting is_active = 0 so it disappears from public catalog while preserving history.
+    if (section === 'badges' || section === 'features') {
+      db.run("UPDATE shop_items SET is_active = 0 WHERE id = ?", [id]);
+    } else if (section === 'vip_plans') {
+      db.run("UPDATE vip_plans SET is_active = 0 WHERE id = ?", [id]);
+    } else if (section === 'gifts') {
+      db.run("UPDATE gifts SET is_active = 0 WHERE id = ?", [id]);
+    } else if (section === 'coin_packages') {
+      db.run("UPDATE coin_packages SET is_active = 0 WHERE id = ?", [id]);
+    } else {
+      return res.status(400).json({ error: 'قسم غير معروف' });
+    }
+
+    const auditId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    db.run(
+      `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, details)
+       VALUES (?, ?, 'archive_store_item', ?, ?, ?)`,
+      [auditId, session.userId, section, id, `أرشفة منتج من المتجر دون حذف سجلات المستخدمين السابقة: ${id}`]
+    );
+
+    saveDb();
+    return res.json({
+      success: true,
+      message: 'تمت أرشفة المنتج وإخفاؤه من المتجر مع الحفاظ التام على مشتريات ومقتنيات الأعضاء السابقة.'
+    });
+  } catch (error: any) {
+    console.error('Archive store item error:', error);
+    return res.status(500).json({ error: error.message || 'خطأ في أرشفة المنتج' });
   }
 });
 

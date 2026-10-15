@@ -7,14 +7,18 @@ export function getToken(): string | null {
 export function setToken(token: string): void {
   localStorage.setItem('fadfada_token', token);
   try {
-    document.cookie = `auth_token=${encodeURIComponent(token)}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=Lax`;
+    const isHttps = window.location.protocol === 'https:';
+    const sameSitePolicy = isHttps ? 'SameSite=None; Secure' : 'SameSite=Lax';
+    document.cookie = `auth_token=${encodeURIComponent(token)}; path=/; max-age=${30 * 24 * 60 * 60}; ${sameSitePolicy}`;
   } catch (e) {}
 }
 
 export function removeToken(): void {
   localStorage.removeItem('fadfada_token');
   try {
-    document.cookie = `auth_token=; path=/; max-age=0; SameSite=Lax`;
+    const isHttps = window.location.protocol === 'https:';
+    const sameSitePolicy = isHttps ? 'SameSite=None; Secure' : 'SameSite=Lax';
+    document.cookie = `auth_token=; path=/; max-age=0; ${sameSitePolicy}`;
   } catch (e) {}
 }
 
@@ -30,6 +34,9 @@ export function getMediaUrl(url?: string): string {
   return url;
 }
 
+// Global in-memory cache for loaded media blobs to prevent duplicate downloads and flicker
+const mediaBlobCache = new Map<string, string>();
+
 /**
  * Loads protected media securely using standard HTTP headers (Bearer token and cookies),
  * returning a secure, clean Object URL (blob:) with ZERO credentials or tokens in the URL.
@@ -39,6 +46,10 @@ export async function loadSecureMediaBlob(url?: string): Promise<string> {
   if (url.startsWith('data:') || url.startsWith('blob:')) return url;
   
   const cleanUrl = getMediaUrl(url);
+  if (mediaBlobCache.has(cleanUrl)) {
+    return mediaBlobCache.get(cleanUrl)!;
+  }
+
   const token = getToken();
   const headers: Record<string, string> = {};
   if (token) {
@@ -51,12 +62,20 @@ export async function loadSecureMediaBlob(url?: string): Promise<string> {
   });
 
   if (!res.ok) {
-    throw new Error(`تعذر تحميل الوسائط (${res.status})`);
+    let errMessage = `تعذر تحميل الوسائط (${res.status})`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.error) errMessage = errJson.error;
+    } catch {}
+    throw new Error(errMessage);
   }
 
   const blob = await res.blob();
-  return URL.createObjectURL(blob);
+  const blobUrl = URL.createObjectURL(blob);
+  mediaBlobCache.set(cleanUrl, blobUrl);
+  return blobUrl;
 }
+
 
 export async function apiRequest<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();

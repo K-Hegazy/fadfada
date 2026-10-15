@@ -7,7 +7,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  register: (data: any) => Promise<void>;
+  register: (data: any) => Promise<any>;
   guestLogin: (nickname: string, gender: string, country?: string, isManualCountry?: boolean, termsAgreed?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -82,13 +82,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const register = async (data: any) => {
-    const res = await apiRequest<{ token: string; user: User }>('/auth/register', {
+    const res = await apiRequest<{ token?: string; user?: User; requireEmailVerification?: boolean; message?: string; email?: string }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data)
     });
-    setToken(res.token);
-    setUser(res.user);
-    socketService.connect();
+    if (res.token && res.user) {
+      setToken(res.token);
+      setUser(res.user);
+      socketService.connect();
+    }
+    return res;
   };
 
   const guestLogin = async (nickname: string, gender: string, country?: string, isManualCountry?: boolean, termsAgreed: boolean = true) => {

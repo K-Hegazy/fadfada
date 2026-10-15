@@ -12,11 +12,25 @@ export interface SendEmailOptions {
 }
 
 // Helper to check if production SMTP is configured
+export function getMissingSmtpSettings(): string[] {
+  const missing: string[] = [];
+  if (!process.env.SMTP_HOST?.trim()) missing.push('SMTP_HOST (عنوان خادم البريد)');
+  if (!process.env.SMTP_USER?.trim()) missing.push('SMTP_USER (حساب البريد الإلكتروني)');
+  if (!process.env.SMTP_PASS?.trim()) missing.push('SMTP_PASS (كلمة مرور التطبيق / App Password)');
+  return missing;
+}
+
 export function isSmtpConfigured(): boolean {
-  const host = process.env.SMTP_HOST?.trim();
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS?.trim();
-  return Boolean(host && user && pass);
+  return getMissingSmtpSettings().length === 0;
+}
+
+// Ensure the sender display name is always "فضفضه" while keeping current email address unchanged
+export function getSenderAddress(): { name: string; address: string } {
+  const currentEmail = process.env.SMTP_USER?.trim() || process.env.SMTP_FROM?.trim() || 'hegazymr6@gmail.com';
+  return {
+    name: 'فضفضه',
+    address: currentEmail
+  };
 }
 
 // Create Nodemailer Transporter (Provider-Agnostic, 100% Real SMTP)
@@ -47,7 +61,8 @@ export function getTransporter(): Transporter | null {
 
 export function buildVerificationHtml(options: SendEmailOptions): string {
   const { username, token, code, baseUrl } = options;
-  const verifyLink = `${baseUrl.replace(/\/$/, '')}/verify-email?token=${token}`;
+  const verifyLink = `${baseUrl.replace(/\/$/, '')}/api/auth/verify-email?token=${token}`;
+  const webLink = `${baseUrl.replace(/\/$/, '')}/?token=${token}`;
 
   return `
 <!DOCTYPE html>
@@ -222,27 +237,50 @@ export async function createAndSendVerification(
     // Dispatch email
     const transporter = getTransporter();
     if (!transporter) {
-      console.warn('[Email Verification] Real SMTP is not configured. Missing SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM.');
+      const missing = getMissingSmtpSettings();
+      const missingStr = missing.length > 0 ? missing.join('، ') : 'إعدادات خادم البريد غير مكتملة';
+      console.warn(`[Email Verification] SMTP is not configured. Missing: ${missingStr}`);
       return {
         success: false,
         token: '',
         code: '',
-        error: 'خدمة إرسال البريد الإلكتروني غير مهيأة على الخادم حالياً. يرجى مراجعة إدارة المنصة.'
+        error: `خدمة إرسال البريد غير مكتملة الإعدادات على الخادم (${missingStr}).`
       };
     }
 
-    const fromAddress = process.env.SMTP_FROM?.trim() || 'فضفضه <no-reply@fadfada.app>';
+    const sender = getSenderAddress();
     const html = buildVerificationHtml({ to: cleanEmail, username, token, code, baseUrl });
+    const verifyLink = `${baseUrl.replace(/\/$/, '')}/api/auth/verify-email?token=${token}`;
 
-    await transporter.sendMail({
-      from: fromAddress,
+    const info = await transporter.sendMail({
+      from: sender,
       to: cleanEmail,
-      subject: 'تأكيد بريدك الإلكتروني - منصة فضفضه 🌹',
-      text: `مرحباً ${username}، رمز التحقق الخاص بك في فضفضه هو: ${code}\nأو اضغط على الرابط: ${baseUrl}/verify-email?token=${token}`,
+      subject: `كود تأكيد حسابك في فضفضه: ${code} ✨`,
+      text: `مرحباً ${username}،\n\nرمز التحقق الخاص بك في منصة فضفضه هو: ${code}\n\nأو يمكنك تأكيد حسابك مباشرة عبر الرابط التالي:\n${verifyLink}\n\nينتهي هذا الرمز خلال 24 ساعة.\nمنصة فضفضه`,
       html
     });
 
-    console.log(`[Email Verification] Verification email dispatched to: ${cleanEmail}`);
+    if (info.rejected && info.rejected.length > 0) {
+      console.error('[Email Verification] Recipient was rejected by SMTP server:', info.rejected);
+      return {
+        success: false,
+        token: '',
+        code: '',
+        error: `رفض خادم البريد استلام الرسالة للعنوان (${cleanEmail}). يرجى التحقق من صحة بريدك الإلكتروني.`
+      };
+    }
+
+    if (!info.messageId) {
+      console.error('[Email Verification] No messageId returned from SMTP server:', info);
+      return {
+        success: false,
+        token: '',
+        code: '',
+        error: 'لم يتلقَّ الخادم تأكيد قبول الرسالة من مزود البريد. يرجى المحاولة لاحقاً.'
+      };
+    }
+
+    console.log(`[Email Verification] Verification email dispatched to: ${cleanEmail}. MessageId: ${info.messageId}. Response: ${info.response || 'OK'}`);
 
     return { success: true, token, code };
   } catch (err: any) {
@@ -251,7 +289,7 @@ export async function createAndSendVerification(
       success: false,
       token: '',
       code: '',
-      error: 'تعذر إرسال رسالة التحقق إلى بريدك الإلكتروني حالياً. يرجى التأكد من صحة البريد والمحاولة لاحقاً.'
+      error: `تعذر إرسال رسالة التحقق إلى بريدك الإلكتروني (${err?.message || 'خطأ في خادم البريد'}). يرجى التأكد من صحة البريد والمحاولة ثانية.`
     };
   }
 }
@@ -276,7 +314,7 @@ export function verifyTokenOrCode(
      JOIN users u ON v.user_id = u.id
      WHERE (v.token = ? OR v.code = ?)
        AND v.verified_at IS NULL
-       AND v.expires_at > CURRENT_TIMESTAMP
+       AND datetime(v.expires_at) > datetime('now')
      ORDER BY v.created_at DESC LIMIT 1`,
     [cleanInput, cleanInput]
   );
@@ -511,11 +549,11 @@ export async function createAndSendPasswordReset(
       return { success: true, message: genericSuccessMsg };
     }
 
-    const fromAddress = process.env.SMTP_FROM?.trim() || 'فضفضه <no-reply@fadfada.app>';
+    const sender = getSenderAddress();
     const html = buildPasswordResetHtml({ username: user.username, token, baseUrl });
 
     await transporter.sendMail({
-      from: fromAddress,
+      from: sender,
       to: cleanEmail,
       subject: 'طلب إعادة تعيين كلمة المرور - منصة فضفضه 🔐',
       text: `مرحباً ${user.username}، يمكنك إعادة تعيين كلمة المرور الخاصة بك عبر الرابط التالي: ${baseUrl}/reset-password?token=${token}`,

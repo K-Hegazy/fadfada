@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { apiRequest } from '../services/api';
+import { apiRequest, setToken } from '../services/api';
 import {
   MessageSquareHeart,
   ShieldCheck,
@@ -18,7 +18,8 @@ import {
   EyeOff,
   CheckCircle2,
   RefreshCw,
-  KeyRound
+  KeyRound,
+  Mail
 } from 'lucide-react';
 import { LegalModal, LegalTab } from './LegalModal';
 
@@ -34,12 +35,22 @@ interface LandingPageProps {
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
-  const { login, register, guestLogin } = useAuth();
+  const { login, register, guestLogin, refreshUser } = useAuth();
 
-  const [modalMode, setModalMode] = useState<'none' | 'login' | 'register' | 'guest' | 'forgot' | 'reset'>('none');
+  const [modalMode, setModalMode] = useState<'none' | 'login' | 'register' | 'guest' | 'forgot' | 'reset' | 'verify'>('none');
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState<boolean>(false);
+
+  // Email Verification states
+  const [verifyEmail, setVerifyEmail] = useState('');
+  const [verifyUsername, setVerifyUsername] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');
+  const [verifySuccessMsg, setVerifySuccessMsg] = useState('');
+  const [verifyError, setVerifyError] = useState('');
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [resendingCode, setResendingCode] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Forgot Password states
   const [forgotEmail, setForgotEmail] = useState('');
@@ -119,20 +130,40 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
     };
   }, []);
 
-  // Check URL query on mount for password reset token
+  // Check URL query on mount for password reset token or email verification
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token') || params.get('reset_token');
+    const status = params.get('status');
     const isResetPath = window.location.pathname.includes('reset-password');
 
-    if (token || isResetPath) {
-      if (token) {
+    if (status === 'verified_success') {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      refreshUser().then(() => {
+        onSuccess();
+      });
+      return;
+    }
+
+    if (token) {
+      if (isResetPath || params.get('reset_token')) {
         setResetToken(token);
         setModalMode('reset');
         verifyResetToken(token);
+      } else {
+        handleAutoVerifyToken(token);
       }
     }
   }, []);
+
+  // Cooldown countdown effect
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   const verifyResetToken = async (token: string) => {
     try {
@@ -254,7 +285,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
       setModalMode('none');
       onSuccess();
     } catch (err: any) {
-      setError(err.message || 'فشل تسجيل الدخول');
+      if (err.message?.includes('تأكيد بريدك') || err.requireEmailVerification) {
+        setVerifyEmail(err.email || loginUsername);
+        setVerifyUsername(err.username || loginUsername);
+        setVerifyCode('');
+        setVerifySuccessMsg('حسابك غير مفعل بعد. يجب تأكيد بريدك الإلكتروني أولاً لتتمكن من تسجيل الدخول. تم إرسال كود التأكيد من «فضفضه» إلى بريدك.');
+        setVerifyError('');
+        setModalMode('verify');
+      } else {
+        setError(err.message || 'فشل تسجيل الدخول');
+      }
     } finally {
       setLoading(false);
     }
@@ -276,7 +316,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
 
     setLoading(true);
     try {
-      await register({
+      const res = await register({
         username: regUsername,
         email: regEmail,
         password: regPassword,
@@ -288,12 +328,87 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
         ownerKey: regOwnerKey,
         termsAgreed: true
       });
-      setModalMode('none');
-      onSuccess();
+
+      // MANDATORY REQUIREMENT: New account remains unable to log in until email confirmation is complete!
+      // Switch directly to verify mode and display confirmation message
+      setVerifyEmail(regEmail);
+      setVerifyUsername(regUsername);
+      setVerifyCode('');
+      setVerifySuccessMsg(res?.message || `تم إرسال كود التأكيد ورابط التفعيل بنجاح من «فضفضه» إلى بريدك الإلكتروني (${regEmail}).`);
+      setVerifyError('');
+      setResendCooldown(60);
+      setModalMode('verify');
     } catch (err: any) {
       setError(err.message || 'فشل إنشاء الحساب');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleVerifyCodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verifyCode.trim()) {
+      setVerifyError('يرجى إدخال كود التحقق المكون من 6 أرقام');
+      return;
+    }
+    setVerifyError('');
+    setVerifyLoading(true);
+    try {
+      const res = await apiRequest<{ success: boolean; token: string; user: any; message: string }>('/auth/verify-email', {
+        method: 'POST',
+        body: JSON.stringify({ code: verifyCode.trim() })
+      });
+      if (res.success && res.token) {
+        setToken(res.token);
+        await refreshUser();
+        setModalMode('none');
+        onSuccess();
+      } else {
+        setVerifyError(res.message || 'تعذر تأكيد الحساب');
+      }
+    } catch (err: any) {
+      setVerifyError(err.message || 'رمز التحقق غير صالح أو انتهت صلاحيته');
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (resendCooldown > 0 || resendingCode) return;
+    setResendingCode(true);
+    setVerifyError('');
+    try {
+      const res = await apiRequest<{ success: boolean; message: string }>('/auth/resend-verification', {
+        method: 'POST',
+        body: JSON.stringify({ email: verifyEmail, username: verifyUsername })
+      });
+      setVerifySuccessMsg(res.message || 'تم إرسال كود تحقق جديد إلى بريدك من «فضفضه»!');
+      setResendCooldown(60);
+    } catch (err: any) {
+      setVerifyError(err.message || 'تعذر إعادة إرسال الرمز حالياً');
+    } finally {
+      setResendingCode(false);
+    }
+  };
+
+  const handleAutoVerifyToken = async (token: string) => {
+    try {
+      setVerifyLoading(true);
+      const res = await apiRequest<{ success: boolean; token: string; user: any; message: string }>('/auth/verify-email', {
+        method: 'POST',
+        body: JSON.stringify({ token })
+      });
+      if (res.success && res.token) {
+        setToken(res.token);
+        window.history.replaceState({}, document.title, window.location.pathname);
+        await refreshUser();
+        onSuccess();
+      }
+    } catch (err: any) {
+      setVerifyError(err.message || 'رابط التحقق غير صالح أو انتهت صلاحيته');
+      setModalMode('verify');
+    } finally {
+      setVerifyLoading(false);
     }
   };
 
@@ -547,6 +662,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                   {modalMode === 'guest' && 'الدخول السريع كزائر'}
                   {modalMode === 'forgot' && 'استعادة كلمة المرور 🔐'}
                   {modalMode === 'reset' && 'إعادة تعيين كلمة المرور الجديدة 🛡️'}
+                  {modalMode === 'verify' && 'تأكيد الحساب وتفعيل البريد ✨'}
                 </h2>
               </div>
               <button
@@ -1298,6 +1414,99 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSuccess }) => {
                 >
                   {loading ? 'جاري تجهيز جلسة الزائر...' : 'دخول فوري إلى المتواجدين حالياً'}
                 </button>
+              </form>
+            )}
+
+            {/* 4. EMAIL VERIFICATION FORM */}
+            {modalMode === 'verify' && (
+              <form onSubmit={handleVerifyCodeSubmit} className="space-y-4">
+                <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-700/60 text-emerald-200 text-xs leading-relaxed space-y-2 font-tajawal">
+                  <div className="flex items-center gap-2 font-bold text-emerald-300 text-sm font-cairo">
+                    <Mail className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <span>تأكيد البريد الإلكتروني لتفعيل الحساب</span>
+                  </div>
+                  <p>
+                    تم إرسال كود التأكيد ورابط التفعيل بنجاح من <strong className="text-white bg-emerald-950 px-1.5 py-0.5 rounded border border-emerald-600/60">«فضفضه»</strong> إلى عنوان البريد:
+                  </p>
+                  <div className="p-2.5 rounded-xl bg-black/60 border border-emerald-800/80 font-mono text-center text-sm font-bold text-white select-all dir-ltr">
+                    {verifyEmail || 'بريدك الإلكتروني'}
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-amber-950/40 border border-amber-800/40 text-[11px] text-amber-300 leading-normal">
+                    ⚠️ <strong>تنبيه هام:</strong> يجب تأكيد البريد أولاً لتتمكن من تسجيل الدخول إلى حسابك. إذا لم تجد الرسالة في صندوق الوارد، يرجى فحص مجلد <strong>الرسائل غير المرغوب فيها (Spam / Junk)</strong> أو الترويجية.
+                  </div>
+                </div>
+
+                {verifySuccessMsg && (
+                  <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-600 text-emerald-300 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{verifySuccessMsg}</span>
+                  </div>
+                )}
+
+                {verifyError && (
+                  <div className="p-3 rounded-xl bg-red-950/80 border border-red-800 text-red-300 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{verifyError}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1.5 text-center">
+                    أدخل رمز التحقق المكون من 6 أرقام:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={6}
+                    value={verifyCode}
+                    onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, ''))}
+                    placeholder="123456"
+                    className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-750 focus:border-emerald-500 text-white text-center font-mono text-2xl tracking-[8px] outline-none transition-colors"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={verifyLoading || verifyCode.trim().length !== 6}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/20 cursor-pointer disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                >
+                  {verifyLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4" />
+                  )}
+                  <span>{verifyLoading ? 'جاري التحقق والتفعيل...' : 'تأكيد الحساب والدخول'}</span>
+                </button>
+
+                <div className="flex items-center justify-between text-xs pt-2 border-t border-neutral-800/80 font-tajawal">
+                  <button
+                    type="button"
+                    disabled={resendCooldown > 0 || resendingCode}
+                    onClick={handleResendCode}
+                    className="text-emerald-400 hover:text-emerald-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${resendingCode ? 'animate-spin' : ''}`} />
+                    <span>
+                      {resendCooldown > 0
+                        ? `إعادة إرسال الكود بعد (${resendCooldown}s)`
+                        : resendingCode
+                        ? 'جاري الإرسال...'
+                        : 'إعادة إرسال كود جديد'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalMode('login');
+                      setError('');
+                      setVerifyError('');
+                    }}
+                    className="text-neutral-400 hover:text-white cursor-pointer"
+                  >
+                    العودة لتسجيل الدخول
+                  </button>
+                </div>
               </form>
             )}
           </div>

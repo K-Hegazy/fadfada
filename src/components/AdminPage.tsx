@@ -43,16 +43,18 @@ import {
   Copy,
   AlertCircle,
   Lightbulb,
-  Radio
+  Radio,
+  ShoppingBag
 } from 'lucide-react';
 import { EventsPage } from './EventsPage';
 import { NewsPage } from './NewsPage';
 import { MissionsPage } from './MissionsPage';
 import { LoginNoticeModal } from './LoginNoticeModal';
+import { StoreManagementPanel } from './StoreManagementPanel';
 
 export const AdminPage: React.FC = () => {
   const { user, refreshUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'events' | 'news' | 'missions' | 'reports' | 'settings' | 'story_ads' | 'random_chat' | 'audit' | 'payments' | 'suggestions'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'wallet' | 'vip' | 'store' | 'events' | 'news' | 'missions' | 'reports' | 'settings' | 'story_ads' | 'random_chat' | 'audit' | 'payments' | 'suggestions'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [reportsList, setReportsList] = useState<any[]>([]);
@@ -1024,6 +1026,15 @@ export const AdminPage: React.FC = () => {
                 باقات VIP
               </button>
               <button
+                onClick={() => setActiveTab('store')}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === 'store' ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-sm' : 'text-neutral-400 hover:text-amber-300'
+                }`}
+              >
+                <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
+                إدارة المتجر
+              </button>
+              <button
                 onClick={() => setActiveTab('events')}
                 className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeTab === 'events' ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-sm' : 'text-neutral-400 hover:text-amber-300'
@@ -1755,6 +1766,11 @@ export const AdminPage: React.FC = () => {
             ))}
           </div>
         </div>
+      )}
+
+      {/* STORE MANAGEMENT TAB (Owner Only) */}
+      {activeTab === 'store' && isOwner && (
+        <StoreManagementPanel />
       )}
 
       {/* 5. EVENTS MANAGEMENT TAB (Owner/Admin) */}

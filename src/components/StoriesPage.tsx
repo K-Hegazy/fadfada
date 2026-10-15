@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { apiRequest, uploadMedia, getMediaUrl } from '../services/api';
+import { apiRequest, uploadMedia, getMediaUrl, loadSecureMediaBlob } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Story } from '../types';
 import {
@@ -23,7 +23,8 @@ import {
   AlertCircle,
   FileVideo,
   CheckCircle2,
-  RotateCcw
+  RotateCcw,
+  Loader2
 } from 'lucide-react';
 
 export interface StoryAd {
@@ -44,6 +45,207 @@ const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const ALLOWED_VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
+
+// Secure thumbnail component for story cards
+const StoryCardThumbnail: React.FC<{ mediaUrl: string; isVideo: boolean }> = ({ mediaUrl, isVideo }) => {
+  const [blobUrl, setBlobUrl] = useState<string>('');
+
+  useEffect(() => {
+    let active = true;
+    loadSecureMediaBlob(mediaUrl)
+      .then(url => {
+        if (active) setBlobUrl(url);
+      })
+      .catch(err => {
+        console.warn('[StoryCardThumbnail] Failed to load preview blob:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, [mediaUrl]);
+
+  if (!blobUrl) {
+    return (
+      <div className="absolute inset-0 bg-neutral-900/60 animate-pulse pointer-events-none" />
+    );
+  }
+
+  if (isVideo) {
+    return (
+      <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+        <video
+          src={blobUrl}
+          muted
+          preload="metadata"
+          className="absolute inset-0 w-full h-full object-cover opacity-40 pointer-events-none"
+        />
+        <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white z-10 border border-white/20">
+          <Play className="w-5 h-5 fill-white ml-0.5" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={blobUrl}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="absolute inset-0 w-full h-full object-cover opacity-35"
+    />
+  );
+};
+
+// Secure viewer media component with full playback controls and diagnostic error states (no locks)
+const StoryViewerMedia: React.FC<{
+  mediaUrl?: string;
+  isVideo: boolean;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  isVideoPlaying: boolean;
+  isVideoMuted: boolean;
+  toggleVideoPlayback: () => void;
+  toggleVideoMute: () => void;
+  setVideoDuration: (d: number) => void;
+  setVideoCurrentTime: (t: number) => void;
+}> = ({
+  mediaUrl,
+  isVideo,
+  videoRef,
+  isVideoPlaying,
+  isVideoMuted,
+  toggleVideoPlayback,
+  toggleVideoMute,
+  setVideoDuration,
+  setVideoCurrentTime
+}) => {
+  const [blobUrl, setBlobUrl] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [retryKey, setRetryKey] = useState<number>(0);
+
+  useEffect(() => {
+    if (!mediaUrl) {
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    setLoading(true);
+    setErrorMessage('');
+
+    loadSecureMediaBlob(mediaUrl)
+      .then(url => {
+        if (active) {
+          setBlobUrl(url);
+          setLoading(false);
+        }
+      })
+      .catch((err: any) => {
+        if (active) {
+          console.error('[StoryViewerMedia] Error fetching protected media:', { mediaUrl, error: err.message });
+          setErrorMessage(err.message || 'تعذر تحميل وسائط القصة');
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [mediaUrl, retryKey]);
+
+  if (!mediaUrl) {
+    return <div className="absolute inset-0 bg-gradient-to-b from-purple-950/60 to-neutral-950 opacity-90" />;
+  }
+
+  if (loading) {
+    return (
+      <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center gap-3 z-10 text-purple-400">
+        <Loader2 className="w-8 h-8 animate-spin" />
+        <span className="text-xs text-neutral-300 font-tajawal">جاري تحميل وسائط القصة بأمان...</span>
+      </div>
+    );
+  }
+
+  if (errorMessage) {
+    return (
+      <div className="absolute inset-0 bg-neutral-950/95 flex flex-col items-center justify-center p-6 text-center space-y-3 z-20">
+        <div className="w-12 h-12 rounded-full bg-rose-950/70 border border-rose-800 flex items-center justify-center text-rose-400">
+          <AlertCircle className="w-6 h-6" />
+        </div>
+        <div className="text-sm font-bold text-rose-300 font-cairo">
+          تعذر تحميل وسائط القصة
+        </div>
+        <p className="text-xs text-neutral-400 max-w-xs font-tajawal leading-relaxed">
+          {errorMessage}
+        </p>
+        <button
+          type="button"
+          onClick={() => setRetryKey(prev => prev + 1)}
+          className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold font-cairo flex items-center gap-1.5 shadow-lg cursor-pointer"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          <span>إعادة المحاولة</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (isVideo) {
+    return (
+      <div className="absolute inset-0 bg-black flex items-center justify-center overflow-hidden">
+        <video
+          ref={videoRef}
+          src={blobUrl}
+          autoPlay
+          playsInline
+          loop
+          muted={isVideoMuted}
+          onLoadedMetadata={() => {
+            if (videoRef.current) setVideoDuration(videoRef.current.duration);
+          }}
+          onTimeUpdate={() => {
+            if (videoRef.current) setVideoCurrentTime(videoRef.current.currentTime);
+          }}
+          onError={e => {
+            console.error('[Story Video Playback Error]', e);
+            setErrorMessage('تعذر تشغيل مقطع الفيديو في المشغّل');
+          }}
+          className="w-full h-full object-contain cursor-pointer"
+          onClick={toggleVideoPlayback}
+        />
+        {/* Subtle Video Overlay Controls Bar */}
+        <div className="absolute bottom-16 right-4 left-4 z-20 flex items-center justify-between bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10">
+          <button
+            type="button"
+            onClick={toggleVideoPlayback}
+            className="text-white hover:text-purple-400 p-1 cursor-pointer flex items-center gap-1.5 text-xs font-tajawal"
+          >
+            {isVideoPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
+            <span>{isVideoPlaying ? 'إيقاف' : 'تشغيل'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={toggleVideoMute}
+            className="text-white hover:text-purple-400 p-1 cursor-pointer"
+          >
+            {isVideoMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={blobUrl}
+      alt=""
+      className="absolute inset-0 w-full h-full object-cover opacity-70"
+    />
+  );
+};
+
 
 export const StoriesPage: React.FC = () => {
   const { user } = useAuth();
@@ -371,27 +573,8 @@ export const StoriesPage: React.FC = () => {
                 }`}
               >
                 {/* Background image or video thumbnail */}
-                {story.media_url && !isStoryVideo && (
-                  <img
-                    src={getMediaUrl(story.media_url)}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    className="absolute inset-0 w-full h-full object-cover opacity-35"
-                  />
-                )}
-                {story.media_url && isStoryVideo && (
-                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                    <video
-                      src={getMediaUrl(story.media_url)}
-                      muted
-                      preload="metadata"
-                      className="absolute inset-0 w-full h-full object-cover opacity-40 pointer-events-none"
-                    />
-                    <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white z-10 border border-white/20">
-                      <Play className="w-5 h-5 fill-white ml-0.5" />
-                    </div>
-                  </div>
+                {story.media_url && (
+                  <StoryCardThumbnail mediaUrl={story.media_url} isVideo={isStoryVideo} />
                 )}
 
                 {/* Top header on card */}
@@ -504,53 +687,17 @@ export const StoriesPage: React.FC = () => {
             /* B. Normal Story Viewer (Image or Video) */
             <div className="relative w-full max-w-sm h-[84dvh] sm:h-[78vh] bg-[#0c0e15] border border-neutral-800 rounded-2xl sm:rounded-3xl flex flex-col justify-between p-4 sm:p-5 overflow-hidden shadow-2xl">
               {/* Media Layer */}
-              {isCurrentStoryVideo(currentStory) ? (
-                <div className="absolute inset-0 bg-black flex items-center justify-center overflow-hidden">
-                  <video
-                    ref={videoRef}
-                    src={getMediaUrl(currentStory.media_url)}
-                    autoPlay
-                    playsInline
-                    loop
-                    muted={isVideoMuted}
-                    onLoadedMetadata={() => {
-                      if (videoRef.current) setVideoDuration(videoRef.current.duration);
-                    }}
-                    onTimeUpdate={() => {
-                      if (videoRef.current) setVideoCurrentTime(videoRef.current.currentTime);
-                    }}
-                    className="w-full h-full object-contain cursor-pointer"
-                    onClick={toggleVideoPlayback}
-                  />
-                  {/* Subtle Video Overlay Controls Bar */}
-                  <div className="absolute bottom-16 right-4 left-4 z-20 flex items-center justify-between bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10">
-                    <button
-                      type="button"
-                      onClick={toggleVideoPlayback}
-                      className="text-white hover:text-purple-400 p-1 cursor-pointer flex items-center gap-1.5 text-xs font-tajawal"
-                    >
-                      {isVideoPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
-                      <span>{isVideoPlaying ? 'إيقاف' : 'تشغيل'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={toggleVideoMute}
-                      className="text-white hover:text-purple-400 p-1 cursor-pointer"
-                    >
-                      {isVideoMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
-                    </button>
-                  </div>
-                </div>
-              ) : currentStory.media_url ? (
-                <img
-                  src={getMediaUrl(currentStory.media_url)}
-                  alt=""
-                  className="absolute inset-0 w-full h-full object-cover opacity-60"
-                />
-              ) : (
-                <div className="absolute inset-0 bg-gradient-to-b from-purple-950/60 to-neutral-950 opacity-90" />
-              )}
+              <StoryViewerMedia
+                mediaUrl={currentStory.media_url}
+                isVideo={isCurrentStoryVideo(currentStory)}
+                videoRef={videoRef}
+                isVideoPlaying={isVideoPlaying}
+                isVideoMuted={isVideoMuted}
+                toggleVideoPlayback={toggleVideoPlayback}
+                toggleVideoMute={toggleVideoMute}
+                setVideoDuration={setVideoDuration}
+                setVideoCurrentTime={setVideoCurrentTime}
+              />
 
               {/* Gradient scrims for readability */}
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/70 pointer-events-none" />

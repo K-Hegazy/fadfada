@@ -615,8 +615,18 @@ function initSchema(db: SqlDatabase) {
   try { db.run("ALTER TABLE payment_orders ADD COLUMN admin_notes TEXT DEFAULT ''"); } catch {}
   try { db.run("ALTER TABLE payment_orders ADD COLUMN reviewed_by TEXT DEFAULT ''"); } catch {}
   try { db.run("ALTER TABLE payment_orders ADD COLUMN reviewed_at DATETIME DEFAULT NULL"); } catch {}
-  try { db.run("CREATE INDEX IF NOT EXISTS idx_pay_orders_status ON payment_orders(status, created_at)"); } catch {}
   try { db.run("UPDATE coin_packages SET currency = 'EGP' WHERE currency = 'SAR' OR currency IS NULL"); } catch {}
+
+  // Safe migrations for Full Owner Store Management (Badges, Features, Gifts, VIP, Coins)
+  try { db.run("ALTER TABLE gifts ADD COLUMN is_active INTEGER DEFAULT 1"); } catch {}
+  try { db.run("ALTER TABLE gifts ADD COLUMN display_order INTEGER DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE gifts ADD COLUMN description TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE gifts ADD COLUMN image_url TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE shop_items ADD COLUMN image_url TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE vip_plans ADD COLUMN image_url TEXT DEFAULT ''"); } catch {}
+  try { db.run("ALTER TABLE coin_packages ADD COLUMN image_url TEXT DEFAULT ''"); } catch {}
+  try { db.run("UPDATE gifts SET is_active = 1 WHERE is_active IS NULL"); } catch {}
+  try { db.run("UPDATE shop_items SET is_active = 1 WHERE is_active IS NULL"); } catch {}
 
   // Safe creation of platform_posts and post_likes tables
   db.run(`
