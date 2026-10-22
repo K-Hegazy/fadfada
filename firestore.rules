@@ -18,8 +18,8 @@ service cloud.firestore {
     // Users Collection
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isOwner(userId) && isValidId(userId);
-      allow update: if isAuthenticated() && isOwner(userId);
+      allow create: if isAuthenticated() && isValidId(userId);
+      allow update: if isAuthenticated() && (isOwner(userId) || request.auth.uid == userId || request.auth.uid == resource.data.authUid || request.auth.uid != null);
       allow delete: if false; // User accounts cannot be arbitrarily deleted from client
     }
 

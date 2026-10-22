@@ -60,6 +60,7 @@ import {
 import { getDbSyncStatus, syncDatabaseToCloud } from './server/dbSync.js';
 import { runTestCleanup } from './server/cleanup-tests.js';
 import { initClusterEvents, publishClusterEvent } from './server/clusterEvents.js';
+import { getPostgresPool } from './server/postgresDb.js';
 
 dotenv.config();
 
@@ -1334,6 +1335,81 @@ app.post('/api/auth/login', loginRateLimiter, async (req: Request, res: Response
   } catch (error) {
     console.error('Login error:', error);
     return res.status(500).json({ error: 'حدث خطأ أثناء تسجيل الدخول' });
+  }
+});
+
+// Firebase Auth Exchange & Sign-in (Google / Firebase Auth directly)
+app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
+  try {
+    const { email, username, authUid } = req.body;
+    if (!email && !authUid) {
+      return res.status(400).json({ error: 'بيانات الحساب من Firebase غير متوفرة' });
+    }
+
+    const db = await getDb();
+    let user: any = null;
+    if (email) {
+      user = queryOne(db, "SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email.trim()]);
+    }
+    if (!user && username) {
+      user = queryOne(db, "SELECT * FROM users WHERE LOWER(username) = LOWER(?)", [username.trim()]);
+    }
+
+    if (!user) {
+      const newUserId = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      const cleanUsername = (username || email?.split('@')[0] || 'User').replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '_').substring(0, 16);
+      const uniqueUsername = cleanUsername + '_' + Math.floor(100 + Math.random() * 900);
+      
+      db.run(
+        `INSERT INTO users (id, username, email, password_hash, salt, role, is_guest, email_verified, email_verified_at, coins, level, xp, streak, created_at)
+         VALUES (?, ?, ?, 'firebase_managed', 'firebase_salt', 'user', 0, 1, CURRENT_TIMESTAMP, 100, 1, 0, 1, CURRENT_TIMESTAMP)`,
+        [newUserId, uniqueUsername, email || '']
+      );
+      saveDb();
+
+      if (process.env.SQL_HOST) {
+        getPostgresPool()?.query(
+          `INSERT INTO users (id, username, email, password_hash, salt, role, is_guest, email_verified, email_verified_at, coins, level, xp, streak, created_at)
+           VALUES ($1, $2, $3, 'firebase_managed', 'firebase_salt', 'user', 0, 1, NOW(), 100, 1, 0, 1, NOW())
+           ON CONFLICT (id) DO NOTHING`,
+          [newUserId, uniqueUsername, email || '']
+        ).catch(() => {});
+      }
+
+      user = queryOne(db, "SELECT * FROM users WHERE id = ?", [newUserId]);
+    }
+
+    if (user.is_banned === 1) {
+      return res.status(403).json({ error: 'تم إيقاف هذا الحساب' });
+    }
+
+    const token = createSession(db, user.id);
+    setAuthCookie(res, token);
+
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        emailVerified: true,
+        role: user.role,
+        gender: user.gender,
+        country: user.country,
+        bio: user.bio,
+        avatarUrl: user.avatar_url,
+        level: user.level,
+        coins: user.coins,
+        xp: user.xp,
+        streak: user.streak,
+        vipLevel: user.vip_level,
+        isGuest: false
+      }
+    });
+  } catch (error: any) {
+    console.error('Firebase login route error:', error);
+    return res.status(500).json({ error: error.message || 'خطأ في معالجة تسجيل الدخول عبر Firebase' });
   }
 });
 

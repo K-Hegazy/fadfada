@@ -8,15 +8,17 @@
         "id": { "type": "string", "description": "Unique user identifier" },
         "username": { "type": "string", "description": "Unique display username" },
         "email": { "type": "string", "description": "User email address" },
-        "role": { "type": "string", "description": "User permission role", "enum": ["user", "moderator", "admin", "owner"] },
+        "role": { "type": "string", "description": "User permission role", "enum": ["basic", "user", "moderator", "admin", "owner"] },
+        "balance": { "type": "number", "description": "Account coin balance" },
         "coins": { "type": "number", "description": "Wallet coin balance" },
         "avatarUrl": { "type": "string", "description": "Profile picture URL" },
         "bio": { "type": "string", "description": "User biography status" },
         "gender": { "type": "string", "description": "Gender preference" },
         "isOnline": { "type": "boolean", "description": "Realtime online presence indicator" },
+        "lastSeen": { "type": "string", "format": "date-time", "description": "Last seen timestamp" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Account registration timestamp" }
       },
-      "required": ["id", "username", "role", "coins"]
+      "required": ["email", "role", "balance", "isOnline"]
     },
     "Room": {
       "title": "Room",
