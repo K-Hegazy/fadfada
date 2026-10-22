@@ -3,6 +3,7 @@
   "appId": "1:928427511233:web:dc1e4b3335e21101f43340",
   "apiKey": "AIzaSyDsLz8bZ_BfaLGZW_D7g8yrxbR38il3FgY",
   "authDomain": "data-thinker-t4mm2.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-fadfada-33251de2-6b80-4bd5-ae85-c372d81edf59",
   "storageBucket": "data-thinker-t4mm2.firebasestorage.app",
   "messagingSenderId": "928427511233",
   "measurementId": "",

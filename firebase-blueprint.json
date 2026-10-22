@@ -1,0 +1,84 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile in Fadfada social platform",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user identifier" },
+        "username": { "type": "string", "description": "Unique display username" },
+        "email": { "type": "string", "description": "User email address" },
+        "role": { "type": "string", "description": "User permission role", "enum": ["user", "moderator", "admin", "owner"] },
+        "coins": { "type": "number", "description": "Wallet coin balance" },
+        "avatarUrl": { "type": "string", "description": "Profile picture URL" },
+        "bio": { "type": "string", "description": "User biography status" },
+        "gender": { "type": "string", "description": "Gender preference" },
+        "isOnline": { "type": "boolean", "description": "Realtime online presence indicator" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account registration timestamp" }
+      },
+      "required": ["id", "username", "role", "coins"]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "Public or private chat room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique room ID" },
+        "name": { "type": "string", "description": "Room title" },
+        "description": { "type": "string", "description": "Room description" },
+        "category": { "type": "string", "description": "Room category" },
+        "ownerId": { "type": "string", "description": "ID of room creator" },
+        "isVipOnly": { "type": "boolean", "description": "Whether room is restricted to VIPs" },
+        "costPerMinute": { "type": "number", "description": "Per-minute pricing in coins" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Room creation timestamp" }
+      },
+      "required": ["id", "name", "ownerId"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Chat message inside room or conversation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique message ID" },
+        "roomId": { "type": "string", "description": "Room ID if room message" },
+        "senderId": { "type": "string", "description": "Sender user ID" },
+        "content": { "type": "string", "description": "Text message content" },
+        "type": { "type": "string", "description": "Message media type", "enum": ["text", "image", "video", "audio", "gift"] },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Message timestamp" }
+      },
+      "required": ["id", "senderId", "content", "createdAt"]
+    },
+    "Story": {
+      "title": "Story",
+      "description": "24-hour temporary user story",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique story ID" },
+        "userId": { "type": "string", "description": "Author user ID" },
+        "content": { "type": "string", "description": "Story caption text" },
+        "mediaUrl": { "type": "string", "description": "Attached media URL" },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Expiration timestamp (24h)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "userId", "expiresAt", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile collection"
+    },
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Chat rooms collection"
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages inside a specific room"
+    },
+    "/stories/{storyId}": {
+      "schema": "Story",
+      "description": "24-hour stories collection"
+    }
+  }
+}

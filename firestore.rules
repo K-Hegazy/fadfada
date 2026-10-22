@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 64;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidId(userId);
+      allow update: if isAuthenticated() && isOwner(userId);
+      allow delete: if false; // User accounts cannot be arbitrarily deleted from client
+    }
+
+    // Rooms Collection
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidId(roomId);
+      allow update: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || request.auth.token.role == 'owner');
+      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || request.auth.token.role == 'owner');
+
+      // Room Messages Subcollection
+      match /messages/{messageId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid && isValidId(messageId);
+        allow update: if false;
+        allow delete: if isAuthenticated() && (resource.data.senderId == request.auth.uid || request.auth.token.role == 'owner');
+      }
+    }
+
+    // Stories Collection
+    match /stories/{storyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid && isValidId(storyId);
+      allow update: if false;
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || request.auth.token.role == 'owner');
+    }
+  }
+}
