@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import initSqlJs, { Database as SqlDatabase } from 'sql.js';
+import { bootSyncDatabase, syncDatabaseToCloud } from './dbSync.js';
+import { executePostgresWalletTransaction } from './postgresDb.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'fadfada.sqlite');
@@ -13,6 +15,13 @@ export async function getDb(): Promise<SqlDatabase> {
 
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+
+  // Attempt to restore latest database snapshot from persistent cloud storage if local is missing
+  try {
+    await bootSyncDatabase();
+  } catch (err) {
+    console.warn('[db] bootSyncDatabase warning:', err);
   }
 
   const SQL = await initSqlJs();
@@ -39,6 +48,11 @@ export function saveDbSync(): void {
     const data = dbInstance.export();
     const buffer = Buffer.from(data);
     fs.writeFileSync(DB_FILE, buffer);
+
+    // Asynchronously replicate snapshot to persistent cloud storage
+    syncDatabaseToCloud().catch(err => {
+      console.error('[dbSync] Error syncing DB snapshot:', err);
+    });
   } catch (err) {
     console.error('Error saving database:', err);
   }
@@ -1531,6 +1545,20 @@ export function executeWalletTransaction(
       params.idempotencyKey || null
     ]
   );
+
+  // Dual-engine: Persist transaction and balance directly to Cloud SQL PostgreSQL
+  if (process.env.SQL_HOST) {
+    executePostgresWalletTransaction({
+      userId: params.userId,
+      amount: params.amount,
+      type: params.type,
+      description: params.description,
+      relatedUserId: params.relatedUserId,
+      idempotencyKey: params.idempotencyKey
+    }).catch(err => {
+      console.warn('[PostgreSQL] Cloud SQL wallet transaction sync notice:', err.message);
+    });
+  }
 
   return {
     success: true,

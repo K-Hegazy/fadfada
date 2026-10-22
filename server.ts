@@ -49,7 +49,17 @@ import {
   resetPasswordRateLimiter
 } from './server/rateLimiter.js';
 import { checkMessageContent } from './server/moderation.js';
-import { initCronJobs } from './server/cron.js';
+import { initCronJobs, runCleanup } from './server/cron.js';
+import {
+  saveMediaFile,
+  getMediaFile,
+  deleteMediaFile,
+  getStorageStatus,
+  syncAllLocalUploadsToCloud
+} from './server/storage.js';
+import { getDbSyncStatus, syncDatabaseToCloud } from './server/dbSync.js';
+import { runTestCleanup } from './server/cleanup-tests.js';
+import { initClusterEvents, publishClusterEvent } from './server/clusterEvents.js';
 
 dotenv.config();
 
@@ -102,7 +112,11 @@ app.get('/uploads/:filename', async (req: Request, res: Response) => {
     const filePath = path.join(UPLOAD_DIR, safeFilename);
 
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'الملف غير موجود' });
+      // Pull from persistent cloud storage (Google Cloud Storage or Supabase) if missing from local ephemeral disk
+      const cloudResult = await getMediaFile(safeFilename);
+      if (!cloudResult.found) {
+        return res.status(404).json({ error: 'الملف غير موجود' });
+      }
     }
 
     const cookieToken = parseCookies(req.headers.cookie).auth_token || parseCookies(req.headers.cookie).fadfada_token;
@@ -342,7 +356,7 @@ async function requireOwner(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-async function broadcastOnlineStatus(userId: string, isOnline: boolean, customActivityStatus?: string) {
+async function broadcastOnlineStatus(userId: string, isOnline: boolean, customActivityStatus?: string, skipCluster = false) {
   let userDetails: any = null;
   if (isOnline) {
     try {
@@ -454,9 +468,18 @@ async function broadcastOnlineStatus(userId: string, isOnline: boolean, customAc
       }
     }
   }
+
+  // Publish presence update to cluster
+  if (!skipCluster) {
+    publishClusterEvent({
+      channel: 'presence',
+      target: userId,
+      payload: { isOnline, customActivityStatus }
+    }).catch(() => {});
+  }
 }
 
-function sendToUser(userId: string, messageObj: any) {
+function sendToUserLocal(userId: string, messageObj: any) {
   const sockets = connectedSockets.get(userId);
   if (sockets) {
     const payload = JSON.stringify(messageObj);
@@ -466,6 +489,30 @@ function sendToUser(userId: string, messageObj: any) {
       }
     }
   }
+}
+
+function sendToUser(userId: string, messageObj: any) {
+  sendToUserLocal(userId, messageObj);
+  publishClusterEvent({ channel: 'user', target: userId, payload: messageObj }).catch(() => {});
+}
+
+function broadcastToRoomLocal(roomId: string, messageObj: any, excludeUserId?: string) {
+  getDb().then(db => {
+    const members = queryAll(db, "SELECT user_id FROM room_members WHERE room_id = ?", [roomId]);
+    const payload = JSON.stringify(messageObj);
+    for (const m of members) {
+      if (m.user_id !== excludeUserId) {
+        const sockets = connectedSockets.get(m.user_id);
+        if (sockets) {
+          for (const ws of sockets) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(payload);
+            }
+          }
+        }
+      }
+    }
+  }).catch(() => {});
 }
 
 function broadcastToRoom(db: any, roomId: string, messageObj: any, excludeUserId?: string) {
@@ -483,6 +530,7 @@ function broadcastToRoom(db: any, roomId: string, messageObj: any, excludeUserId
       }
     }
   }
+  publishClusterEvent({ channel: 'room', target: roomId, payload: messageObj, excludeUserId }).catch(() => {});
 }
 
 function broadcastAudioState(db: any, roomId: string) {
@@ -501,6 +549,29 @@ function broadcastAudioState(db: any, roomId: string) {
     speakers
   });
 }
+
+// Initialize multi-instance real-time cluster synchronization
+initClusterEvents({
+  onRoomBroadcast: (roomId, msg, excludeUserId) => broadcastToRoomLocal(roomId, msg, excludeUserId),
+  onUserSend: (userId, msg) => sendToUserLocal(userId, msg),
+  onPresenceBroadcast: (userId, isOnline, customActivityStatus) => {
+    broadcastOnlineStatus(userId, isOnline, customActivityStatus, true);
+  },
+  onGeneralBroadcast: (msg) => {
+    const payload = JSON.stringify(msg);
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(payload);
+    }
+  },
+  onAudioBroadcast: (roomId, msg) => broadcastToRoomLocal(roomId, msg),
+  onTodBroadcast: (msg) => {
+    const payload = JSON.stringify(msg);
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(payload);
+    }
+  }
+}).catch(err => console.warn('[ClusterEvents] Init warning:', err));
+
 
 // ==========================================
 // REAL-TIME MULTIPLAYER TRUTH OR DARE STATE
@@ -544,7 +615,7 @@ function broadcastTodState() {
   }
 }
 
-// Periodic heartbeat keepalive to prevent zombie sessions (30s interval)
+// Periodic heartbeat keepalive to prevent zombie sessions (25s interval for Cloud Run compatibility)
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((client) => {
     const ws = client as any;
@@ -554,7 +625,7 @@ const heartbeatInterval = setInterval(() => {
     ws.isAlive = false;
     ws.ping();
   });
-}, 30000);
+}, 25000);
 
 wss.on('close', () => {
   clearInterval(heartbeatInterval);
@@ -715,6 +786,15 @@ function touchUserActivity(db: any, userId: string) {
   ws.on('message', async (data: string) => {
     try {
       const msg = JSON.parse(data.toString());
+      if (msg.type === 'ping') {
+        (ws as any).isAlive = true;
+        ws.send(JSON.stringify({ type: 'pong' }));
+        return;
+      }
+      if (msg.type === 'pong') {
+        (ws as any).isAlive = true;
+        return;
+      }
       if (msg.type === 'presence:track') {
         touchUserActivity(db, user.userId);
         if (msg.state?.activityStatus !== undefined) {
@@ -3524,10 +3604,7 @@ app.post('/api/messages/:id/view-once', requireAuth, async (req: Request, res: R
         const currentMsg = queryOne(freshDb, "SELECT media_url FROM private_messages WHERE id = ?", [msgId]);
         if (currentMsg && currentMsg.media_url && currentMsg.media_url.startsWith('/uploads/')) {
           const fn = path.basename(currentMsg.media_url);
-          const fp = path.join(UPLOAD_DIR, fn);
-          if (fs.existsSync(fp)) {
-            try { fs.unlinkSync(fp); } catch {}
-          }
+          deleteMediaFile(fn).catch(() => {});
         }
         freshDb.run(
           "UPDATE private_messages SET media_url = '', content = '⚠️ تم فتح الصورة لمرة واحدة ومسحها نهائياً' WHERE id = ?",
@@ -3559,10 +3636,7 @@ app.post('/api/messages/:id/view-once-close', requireAuth, async (req: Request, 
     if (msg) {
       if (msg.media_url && msg.media_url.startsWith('/uploads/')) {
         const fn = path.basename(msg.media_url);
-        const fp = path.join(UPLOAD_DIR, fn);
-        if (fs.existsSync(fp)) {
-          try { fs.unlinkSync(fp); } catch {}
-        }
+        deleteMediaFile(fn).catch(() => {});
       }
       db.run(
         "UPDATE private_messages SET is_destroyed = 1, is_viewed = 1, media_url = '', content = '⚠️ تم فتح الصورة لمرة واحدة ومسحها نهائياً' WHERE id = ?",
@@ -3634,10 +3708,7 @@ app.post('/api/messages/:id/view-self-destruct', requireAuth, async (req: Reques
         if (currentMsg && currentMsg.is_destroyed !== 1) {
           if (currentMsg.media_url && currentMsg.media_url.startsWith('/uploads/')) {
             const fn = path.basename(currentMsg.media_url);
-            const fp = path.join(UPLOAD_DIR, fn);
-            if (fs.existsSync(fp)) {
-              try { fs.unlinkSync(fp); } catch {}
-            }
+            deleteMediaFile(fn).catch(() => {});
           }
 
           freshDb.run(
@@ -3685,10 +3756,7 @@ app.post('/api/messages/:id/destroy-now', requireAuth, async (req: Request, res:
     if (msg) {
       if (msg.media_url && msg.media_url.startsWith('/uploads/')) {
         const fn = path.basename(msg.media_url);
-        const fp = path.join(UPLOAD_DIR, fn);
-        if (fs.existsSync(fp)) {
-          try { fs.unlinkSync(fp); } catch {}
-        }
+        deleteMediaFile(fn).catch(() => {});
       }
 
       db.run(
@@ -3924,10 +3992,7 @@ const handleDeleteMessage = async (req: Request, res: Response) => {
       // Remove uploaded file from disk if applicable
       if (msg.media_url && msg.media_url.startsWith('/uploads/')) {
         const fn = path.basename(msg.media_url);
-        const fp = path.join(UPLOAD_DIR, fn);
-        if (fs.existsSync(fp)) {
-          try { fs.unlinkSync(fp); } catch {}
-        }
+        deleteMediaFile(fn).catch(() => {});
       }
 
       db.run(
@@ -5212,6 +5277,63 @@ app.get('/api/payments/my-orders', requireAuth, async (req: Request, res: Respon
 });
 
 // ==========================================
+// OWNER CLOUD STORAGE & CLOUD RUN PERSISTENCE
+// ==========================================
+
+// Cloud storage status & health
+app.get('/api/admin/cloud-status', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const storage = getStorageStatus();
+    const dbSync = getDbSyncStatus();
+    return res.json({
+      success: true,
+      storage,
+      dbSync
+    });
+  } catch (error) {
+    console.error('Fetch cloud status error:', error);
+    return res.status(500).json({ error: 'خطأ في جلب حالة التخزين السحابي' });
+  }
+});
+
+// Trigger manual cloud sync for uploads & database
+app.post('/api/admin/cloud-sync', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const uploadSyncResult = await syncAllLocalUploadsToCloud();
+    const dbSyncResult = await syncDatabaseToCloud();
+    const storage = getStorageStatus();
+    const dbSync = getDbSyncStatus();
+
+    return res.json({
+      success: true,
+      message: 'تمت المزامنة بنجاح',
+      uploads: uploadSyncResult,
+      databaseSynced: dbSyncResult,
+      storage,
+      dbSync
+    });
+  } catch (error: any) {
+    console.error('Manual cloud sync error:', error);
+    return res.status(500).json({ error: error?.message || 'خطأ أثناء المزامنة السحابية' });
+  }
+});
+
+// Trigger safe test account cleanup (Owner only)
+app.post('/api/admin/clean-test-accounts', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const result = await runTestCleanup(db);
+    return res.json({
+      success: true,
+      result
+    });
+  } catch (error: any) {
+    console.error('Clean test accounts error:', error);
+    return res.status(500).json({ error: error?.message || 'خطأ أثناء تنظيف الحسابات التجريبية' });
+  }
+});
+
+// ==========================================
 // OWNER PAYMENT SETTINGS & ORDER APPROVALS
 // ==========================================
 
@@ -5227,6 +5349,21 @@ app.get('/api/admin/payment-settings', requireAuth, requireOwner, async (req: Re
   } catch (error) {
     console.error('Fetch admin payment settings error:', error);
     return res.status(500).json({ error: 'خطأ في جلب إعدادات الدفع' });
+  }
+});
+
+// Manual trigger for 24h stories and temporary media cleanup (Owner only)
+app.post('/api/admin/clean-expired-stories', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    await runCleanup(db);
+    return res.json({
+      success: true,
+      message: 'تم فحص وحذف القصص المنتهية والوسائط المؤقتة الأقدم من 24 ساعة بنجاح مع الحفاظ على الحسابات والرسائل'
+    });
+  } catch (error: any) {
+    console.error('Clean expired stories error:', error);
+    return res.status(500).json({ error: error.message || 'خطأ في عملية تنظيف القصص والوسائط المؤقتة' });
   }
 });
 
@@ -6438,13 +6575,13 @@ app.post('/api/upload', requireAuth, uploadRateLimiter, async (req: Request, res
     else if (ext.includes('jpeg')) ext = 'jpg';
 
     const safeName = `file_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
-    const filePath = path.join(UPLOAD_DIR, safeName);
-    fs.writeFileSync(filePath, buffer);
+    const uploadResult = await saveMediaFile(safeName, buffer, mime);
 
     return res.json({
       success: true,
       url: `/uploads/${safeName}`,
-      mimeType: mime
+      mimeType: mime,
+      cloudStored: uploadResult.cloudStored
     });
   } catch (error) {
     console.error('Upload error:', error);
@@ -9555,19 +9692,44 @@ process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
 
 async function setupVite() {
-  const isProd = process.env.NODE_ENV === 'production' && fs.existsSync(path.resolve(process.cwd(), 'dist'));
+  const distPath = path.resolve(process.cwd(), 'dist');
+  const distExists = fs.existsSync(distPath) && fs.existsSync(path.join(distPath, 'index.html'));
+  const isProd = process.env.NODE_ENV === 'production' || distExists;
 
-  if (!isProd) {
+  if (isProd && distExists) {
+    console.log('[Fadfada Platform] Serving production build from dist/');
+    app.use(express.static(distPath, { index: false }));
+    app.get('*', (req: Request, res: Response, next: NextFunction) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+        return next();
+      }
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  } else {
+    console.log('[Fadfada Platform] Serving development mode with Vite middleware');
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
     });
     app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.resolve(process.cwd(), 'dist')));
-    app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.resolve(process.cwd(), 'dist', 'index.html'));
+
+    app.use('*', async (req: Request, res: Response, next: NextFunction) => {
+      const url = req.originalUrl;
+      if (url.startsWith('/api') || url.startsWith('/uploads')) {
+        return next();
+      }
+      try {
+        const indexPath = path.resolve(process.cwd(), 'index.html');
+        let template = fs.readFileSync(indexPath, 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        if (vite.ssrFixStacktrace) {
+          vite.ssrFixStacktrace(e);
+        }
+        next(e);
+      }
     });
   }
 
@@ -9578,6 +9740,14 @@ async function setupVite() {
   saveDb();
 
   await ensureOwnerBootstrap();
+
+  // Clean test accounts on live server instance
+  try {
+    await runTestCleanup(db);
+  } catch (err) {
+    console.warn('[Cleanup] runTestCleanup notice:', err);
+  }
+
   initCronJobs(db);
 
   server.listen(PORT, '0.0.0.0', () => {

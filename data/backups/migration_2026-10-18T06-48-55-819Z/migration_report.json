@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-10-18T06:48:55.918Z",
+  "status": "READY_FOR_CLOUDRUN",
+  "database": {
+    "sha256": "6b9687d9b389c49eac2084157c8a1b38d5962a535a3bf5052358960210410d07",
+    "sizeBytes": 798720,
+    "tablesCount": 51,
+    "usersCount": 29,
+    "messagesCount": 4,
+    "walletTxCount": 20
+  },
+  "uploads": {
+    "totalFiles": 9,
+    "cloudUploaded": 0,
+    "files": [
+      "file_1790861920478_9jsa4.png",
+      "file_1790862020210_xk1ul.png",
+      "file_1790862053593_h9lgo.png",
+      "file_1791455394014_q9prr.png",
+      "file_1791455405491_61uh5.png",
+      "file_1791713127559_or941.png",
+      "file_1791713152276_3tfps.png",
+      "file_1791713152351_nbgh0.webm",
+      "file_1791713559936_fxh3z.png"
+    ]
+  },
+  "storageStatus": {
+    "provider": "local",
+    "providerName": "التخزين المحلي / Cloud Storage Mounted Volume",
+    "isCloudPersistent": false,
+    "bucketName": "data/uploads",
+    "localFilesCount": 9,
+    "cloudConfigured": false,
+    "statusMessage": "يعمل على المجلد المحلي data/uploads. للنشر متعدد النسخ على Cloud Run، قم بضبط GCS_BUCKET أو ربط Cloud Storage Volume Mount."
+  },
+  "dbSyncStatus": {
+    "lastSyncTime": null,
+    "lastSyncSha256": "6b9687d9b389c49eac2084157c8a1b38d5962a535a3bf5052358960210410d07",
+    "syncInProgress": false,
+    "cloudProvider": "none",
+    "bucketName": "",
+    "totalSyncs": 0,
+    "lastError": null
+  }
+}

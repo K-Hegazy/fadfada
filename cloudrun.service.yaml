@@ -1,0 +1,63 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: fadfada-app
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/cpu-throttling: "false"
+        # Attach Cloud SQL instance directly to Cloud Run containers
+        run.googleapis.com/cloudsql-instances: data-thinker-t4mm2:europe-west3:ai-studio-33251de2
+    spec:
+      containerConcurrency: 80
+      # 3600 seconds (1 hour) timeout for persistent WebSocket connections
+      timeoutSeconds: 3600
+      containers:
+      - image: gcr.io/data-thinker-t4mm2/fadfada:latest
+        ports:
+        - name: http1
+          containerPort: 3000
+        resources:
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        env:
+        - name: NODE_ENV
+          value: "production"
+        # Cloud SQL PostgreSQL connection configuration
+        - name: SQL_HOST
+          value: "/cloudsql/data-thinker-t4mm2:europe-west3:ai-studio-33251de2"
+        - name: SQL_DB_NAME
+          value: "cloud_sql_development_database"
+        - name: SQL_USER
+          value: "ai_studio_app_user"
+        - name: GCS_BUCKET
+          value: "fadfada-storage-bucket"
+        - name: APP_URL
+          value: "https://fadfada.app"
+        # Secret environment variables configured via Google Secret Manager:
+        - name: SQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cloudsql-app-password
+              key: latest
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-key
+              key: latest
+        - name: SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: smtp-user
+              key: latest
+        - name: SMTP_PASS
+          valueFrom:
+            secretKeyRef:
+              name: smtp-pass
+              key: latest

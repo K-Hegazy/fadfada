@@ -1,0 +1,432 @@
+{
+  "backupFile": "/app/applet/data/backups/fadfada_before_test_cleanup_2026-10-18T06-46-22-345Z.sqlite",
+  "preBackupHash": "2f43f6f1784f70431ba787c6be3f1d50c8872f01bf175f32ef929d3f4c3c1190",
+  "deletedCount": 65,
+  "deletedUsers": [
+    {
+      "id": "gst_1790420395035_dyin",
+      "username": "زائر_تجربة_2096",
+      "email": ""
+    },
+    {
+      "id": "gst_1790420740811_ztq7",
+      "username": "زائر_اختبار_4682",
+      "email": ""
+    },
+    {
+      "id": "gst_1790500239953_8ucp",
+      "username": "مختبر_الحالة_5497",
+      "email": ""
+    },
+    {
+      "id": "usr_1790719677876_p2zbb",
+      "username": "alpha_1790719677786",
+      "email": "alpha_1790719677786@test.com"
+    },
+    {
+      "id": "usr_1790719677980_njkyk",
+      "username": "beta_1790719677907",
+      "email": "beta_1790719677907@test.com"
+    },
+    {
+      "id": "usr_1790719704664_bsbq7",
+      "username": "user_alpha_1790719704507",
+      "email": "user_alpha_1790719704507@domain.com"
+    },
+    {
+      "id": "usr_1790719732040_jw9ku",
+      "username": "user_alpha_1790719731805",
+      "email": "user_alpha_1790719731805@domain.com"
+    },
+    {
+      "id": "usr_1790719732155_bh9g3",
+      "username": "user_beta_1790719732082",
+      "email": "user_beta_1790719732082@domain.com"
+    },
+    {
+      "id": "usr_1790776600144_1kdyi",
+      "username": "user_alpha_1790776599899",
+      "email": "user_alpha_1790776599899@domain.com"
+    },
+    {
+      "id": "usr_1790776600263_n33x1",
+      "username": "user_beta_1790776600189",
+      "email": "user_beta_1790776600189@domain.com"
+    },
+    {
+      "id": "usr_1790776617044_hqs8q",
+      "username": "user_alpha_1790776616871",
+      "email": "user_alpha_1790776616871@domain.com"
+    },
+    {
+      "id": "usr_1790776617122_6c72k",
+      "username": "user_beta_1790776617064",
+      "email": "user_beta_1790776617064@domain.com"
+    },
+    {
+      "id": "usr_1790776625667_8pw08",
+      "username": "test_tod_1790776625462",
+      "email": "test_tod_1790776625462@domain.com"
+    },
+    {
+      "id": "usr_1790776636381_5cgby",
+      "username": "user_alpha_1790776636054",
+      "email": "user_alpha_1790776636054@domain.com"
+    },
+    {
+      "id": "usr_1790776636588_hxd6t",
+      "username": "user_beta_1790776636454",
+      "email": "user_beta_1790776636454@domain.com"
+    },
+    {
+      "id": "usr_1790777011446_esc3w",
+      "username": "smtp_test_1790777011193",
+      "email": "smtp_test_1790777011193@test.com"
+    },
+    {
+      "id": "usr_test_admin",
+      "username": "TestAdmin",
+      "email": ""
+    },
+    {
+      "id": "usr_test_mod",
+      "username": "TestModerator",
+      "email": ""
+    },
+    {
+      "id": "usr_test_normal",
+      "username": "TestUser",
+      "email": ""
+    },
+    {
+      "id": "gst_test_guest",
+      "username": "ضيف_اختبار",
+      "email": ""
+    },
+    {
+      "id": "gst_1790861897184_iri7",
+      "username": "ضيف_تجربة_4621",
+      "email": ""
+    },
+    {
+      "id": "usr_1790861918142_nu8n1",
+      "username": "test_uA_mupky3ob",
+      "email": "test_ua_mupky3ob@example.com"
+    },
+    {
+      "id": "usr_1790861919179_hhaqn",
+      "username": "test_uB_mupky4jr",
+      "email": "test_ub_mupky4jr@example.com"
+    },
+    {
+      "id": "gst_1790861920289_c2cv",
+      "username": "ضيف_تجربة_1144",
+      "email": ""
+    },
+    {
+      "id": "usr_1790862017541_q4rns",
+      "username": "test_uA_mupl08bw",
+      "email": "test_ua_mupl08bw@example.com"
+    },
+    {
+      "id": "usr_1790862018658_cxe17",
+      "username": "test_uB_mupl09au",
+      "email": "test_ub_mupl09au@example.com"
+    },
+    {
+      "id": "gst_1790862020018_uj5l",
+      "username": "ضيف_تجربة_6821",
+      "email": ""
+    },
+    {
+      "id": "usr_1790862050665_y6e8o",
+      "username": "test_uA_mupl0xxu",
+      "email": "test_ua_mupl0xxu@example.com"
+    },
+    {
+      "id": "usr_1790862052014_86j1r",
+      "username": "test_uB_mupl0z1r",
+      "email": "test_ub_mupl0z1r@example.com"
+    },
+    {
+      "id": "gst_1790862053422_7okp",
+      "username": "ضيف_تجربة_6257",
+      "email": ""
+    },
+    {
+      "id": "usr_1791274865917_nfjl5",
+      "username": "test_1791274865794",
+      "email": "test_1791274865794@example.com"
+    },
+    {
+      "id": "gst_1791274866946_81qm",
+      "username": "ضيف_تجربة_4934",
+      "email": ""
+    },
+    {
+      "id": "usr_1791274867138_vminh",
+      "username": "test2_1791274867083",
+      "email": "test2_1791274867083@example.com"
+    },
+    {
+      "id": "usr_1791275021419_1tg5q",
+      "username": "usr1_1791275021350",
+      "email": "usr1_1791275021350@example.com"
+    },
+    {
+      "id": "gst_1791275022305_25ph",
+      "username": "زائر_تجريبي_8348",
+      "email": ""
+    },
+    {
+      "id": "usr_1791275266133_lmo9t",
+      "username": "testuser_1791275266048",
+      "email": "testuser_1791275266048@example.com"
+    },
+    {
+      "id": "usr_1791275267291_hqns7",
+      "username": "user2_1791275267203",
+      "email": "user2_1791275267203@example.com"
+    },
+    {
+      "id": "usr_1791275411608_vt0m4",
+      "username": "user_e2e_1791275411538",
+      "email": "user_e2e_1791275411538@example.com"
+    },
+    {
+      "id": "usr_1791275412861_iicuk",
+      "username": "user2_e2e_1791275412805",
+      "email": "user2_e2e_1791275412805@example.com"
+    },
+    {
+      "id": "usr_1791275524827_jmgj1",
+      "username": "user_v_1791275524749",
+      "email": "user_v_1791275524749@example.com"
+    },
+    {
+      "id": "usr_1791275526068_y7508",
+      "username": "user2_v_1791275526002",
+      "email": "user2_v_1791275526002@example.com"
+    },
+    {
+      "id": "usr_1791275638316_i45x9",
+      "username": "user_ok_1791275638234",
+      "email": "user_ok_1791275638234@example.com"
+    },
+    {
+      "id": "usr_1791275639596_s3osz",
+      "username": "user2_ok_1791275639541",
+      "email": "user2_ok_1791275639541@example.com"
+    },
+    {
+      "id": "usr_1791275699740_pyrpa",
+      "username": "test_delay_1791275699571",
+      "email": "test_delay_1791275699571@example.com"
+    },
+    {
+      "id": "usr_1791275772451_217cm",
+      "username": "fadfada_u1_1791275772363",
+      "email": "fadfada_u1_1791275772363@example.com"
+    },
+    {
+      "id": "usr_1791275773467_8tc1g",
+      "username": "fadfada_u2_1791275772363",
+      "email": "fadfada_u2_1791275772363@example.com"
+    },
+    {
+      "id": "usr_1791275845637_yp8n9",
+      "username": "fadfada_u1_1791275845562",
+      "email": "fadfada_u1_1791275845562@example.com"
+    },
+    {
+      "id": "usr_1791275846612_dy55d",
+      "username": "fadfada_u2_1791275845562",
+      "email": "fadfada_u2_1791275845562@example.com"
+    },
+    {
+      "id": "usr_1791275929837_bnv18",
+      "username": "fadfada_u1_1791275929756",
+      "email": "fadfada_u1_1791275929756@example.com"
+    },
+    {
+      "id": "usr_1791275931656_13cvp",
+      "username": "fadfada_u2_1791275929756",
+      "email": "fadfada_u2_1791275929756@example.com"
+    },
+    {
+      "id": "usr_1791455357851_l54yz",
+      "username": "user1_357664",
+      "email": "user1_357664@test.com"
+    },
+    {
+      "id": "usr_1791455359175_brouo",
+      "username": "user2_357664",
+      "email": "user2_357664@test.com"
+    },
+    {
+      "id": "usr_1791455381600_jcrec",
+      "username": "user1_381463",
+      "email": "user1_381463@test.com"
+    },
+    {
+      "id": "usr_1791455382621_1g4f9",
+      "username": "user2_381463",
+      "email": "user2_381463@test.com"
+    },
+    {
+      "id": "usr_1791455393132_umdu2",
+      "username": "u_2975",
+      "email": "u1791455392975@test.com"
+    },
+    {
+      "id": "usr_1791455401739_tan8q",
+      "username": "user1_401549",
+      "email": "user1_401549@test.com"
+    },
+    {
+      "id": "usr_1791455402984_fzy4t",
+      "username": "user2_401549",
+      "email": "user2_401549@test.com"
+    },
+    {
+      "id": "usr_1791455504900_prip8",
+      "username": "user1_504739",
+      "email": "user1_504739@test.com"
+    },
+    {
+      "id": "usr_1791455506021_lazro",
+      "username": "user2_504739",
+      "email": "user2_504739@test.com"
+    },
+    {
+      "id": "user_tester_1",
+      "username": "مشارك_1",
+      "email": ""
+    },
+    {
+      "id": "user_tester_2",
+      "username": "مشارك_2",
+      "email": ""
+    },
+    {
+      "id": "user_tester_3",
+      "username": "مشارك_3",
+      "email": ""
+    },
+    {
+      "id": "user_tester_4",
+      "username": "مشارك_4",
+      "email": ""
+    },
+    {
+      "id": "user_tester_5",
+      "username": "مشارك_5",
+      "email": ""
+    },
+    {
+      "id": "user_tester_6",
+      "username": "مشارك_6",
+      "email": ""
+    }
+  ],
+  "remainingCount": 29,
+  "ownerVerified": {
+    "id": "usr_1790285919516_kn7t3",
+    "username": "Hegazy",
+    "email": "hegazymr6@gmail.com",
+    "role": "owner",
+    "active": true
+  },
+  "unconfirmedAccountsKept": [
+    {
+      "id": "gst_1790719678055_parc",
+      "username": "زائر_8028",
+      "role": "user",
+      "created_at": "2026-09-29 22:07:58"
+    },
+    {
+      "id": "gst_1790719685939_ag9i",
+      "username": "زائر_3524",
+      "role": "user",
+      "created_at": "2026-09-29 22:08:05"
+    },
+    {
+      "id": "gst_1790776600419_4wcw",
+      "username": "زائر_4093",
+      "role": "user",
+      "created_at": "2026-09-30 13:56:40"
+    },
+    {
+      "id": "gst_1790776617238_u4fs",
+      "username": "زائر_9847",
+      "role": "user",
+      "created_at": "2026-09-30 13:56:57"
+    },
+    {
+      "id": "gst_1790776620811_znqw",
+      "username": "زائر_2901",
+      "role": "user",
+      "created_at": "2026-09-30 13:57:00"
+    },
+    {
+      "id": "gst_1790776636880_13ie",
+      "username": "زائر_9306",
+      "role": "user",
+      "created_at": "2026-09-30 13:57:16"
+    },
+    {
+      "id": "gst_1791275121359_g5mr",
+      "username": "زائر_6184",
+      "role": "user",
+      "created_at": "2026-10-06 08:25:21"
+    },
+    {
+      "id": "gst_1791275221311_mm5l",
+      "username": "زائر_9882",
+      "role": "user",
+      "created_at": "2026-10-06 08:27:01"
+    },
+    {
+      "id": "gst_1791275267084_tnhg",
+      "username": "زائر_8332",
+      "role": "user",
+      "created_at": "2026-10-06 08:27:47"
+    },
+    {
+      "id": "gst_1791275412711_awn8",
+      "username": "زائر_5326",
+      "role": "user",
+      "created_at": "2026-10-06 08:30:12"
+    },
+    {
+      "id": "gst_1791275525900_3wiv",
+      "username": "زائر_6147",
+      "role": "user",
+      "created_at": "2026-10-06 08:32:05"
+    },
+    {
+      "id": "gst_1791275639438_tbr1",
+      "username": "زائر_5902",
+      "role": "user",
+      "created_at": "2026-10-06 08:33:59"
+    },
+    {
+      "id": "gst_1791275773313_k3ps",
+      "username": "زائر_8085",
+      "role": "user",
+      "created_at": "2026-10-06 08:36:13"
+    },
+    {
+      "id": "gst_1791275846459_rl22",
+      "username": "زائر_8321",
+      "role": "user",
+      "created_at": "2026-10-06 08:37:26"
+    },
+    {
+      "id": "gst_1791275931503_e8ld",
+      "username": "زائر_5590",
+      "role": "user",
+      "created_at": "2026-10-06 08:38:51"
+    }
+  ]
+}
