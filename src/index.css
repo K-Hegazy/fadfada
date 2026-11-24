@@ -1,0 +1,146 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-display: "Readex Pro", "Cairo", system-ui, sans-serif;
+    --font-sans: "Cairo", system-ui, -apple-system, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+    /* Arabic Social Chat Portal Tokens — Light */
+    --bg-canvas: #F2F4F7;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #FFFFFF;
+    --bg-subtle: #EAEFF4;
+    --border-hairline: rgba(15, 23, 42, 0.08);
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #64748B;
+    --accent-primary: #0B7A62;
+    --accent-hover: #08634F;
+    --accent-soft: #E6F4F0;
+  }
+
+  .dark {
+    /* Arabic Social Chat Portal Tokens — Deep Slate-Night */
+    --bg-canvas: #0B1114;
+    --bg-surface: #121B20;
+    --bg-elevated: #18242B;
+    --bg-subtle: #1E2D36;
+    --border-hairline: rgba(255, 255, 255, 0.08);
+    --text-primary: #F1F5F9;
+    --text-secondary: #CBD5E1;
+    --text-muted: #94A3B8;
+    --accent-primary: #10B981;
+    --accent-hover: #059669;
+    --accent-soft: #132E28;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+@keyframes fadfada-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadfada-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes fadfada-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadfada-radar-ring {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.65);
+  }
+}
+
+.fadfada-enter {
+  animation: fadfada-fade-up 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.fadfada-modal-in {
+  animation: fadfada-modal-in 170ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.fadfada-sheet-in {
+  animation: fadfada-sheet-in 190ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.fadfada-radar-ring,
+.fadfada-radar {
+  animation: fadfada-radar-ring 1.7s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Compact custom scrollbar for chat, rooms & member lists */
+.fadfada-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.fadfada-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.fadfada-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.25);
+  border-radius: 9999px;
+}
+.fadfada-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(100, 116, 139, 0.45);
+}

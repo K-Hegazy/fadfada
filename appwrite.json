@@ -1,0 +1,130 @@
+{
+  "projectId": "6b022cc5002da26b7487",
+  "projectName": "fadfada",
+  "settings": {
+    "services": {
+      "account": true,
+      "avatars": true,
+      "databases": true,
+      "locale": true,
+      "health": true,
+      "storage": true,
+      "teams": true,
+      "users": true,
+      "functions": true,
+      "graphql": false,
+      "messaging": true
+    },
+    "auth": {
+      "methods": {
+        "jwt": true,
+        "phone": false,
+        "invites": true,
+        "anonymous": true,
+        "email-otp": false,
+        "magic-url": false,
+        "email-password": true
+      },
+      "security": {
+        "duration": 31536000,
+        "limit": 0,
+        "sessionsLimit": 10,
+        "passwordHistory": 0,
+        "passwordDictionary": false,
+        "personalDataCheck": false,
+        "sessionAlerts": false,
+        "mockNumbers": []
+      }
+    }
+  },
+  "functions": [
+    {
+      "$id": "fadfada-economy",
+      "name": "fadfada-economy",
+      "runtime": "node-22",
+      "specification": "s-0.5vcpu-512mb",
+      "execute": [
+        "users"
+      ],
+      "events": [],
+      "schedule": "",
+      "timeout": 15,
+      "enabled": true,
+      "logging": true,
+      "entrypoint": "src/main.js",
+      "commands": "npm install",
+      "scopes": [
+        "users.read",
+        "users.write",
+        "databases.read",
+        "databases.write",
+        "rows.read",
+        "rows.write"
+      ],
+      "path": "appwrite-functions/fadfada-economy"
+    },
+    {
+      "$id": "fadfada-admin",
+      "name": "fadfada-admin",
+      "runtime": "node-22",
+      "specification": "s-0.5vcpu-512mb",
+      "execute": [
+        "users"
+      ],
+      "events": [],
+      "schedule": "",
+      "timeout": 15,
+      "enabled": true,
+      "logging": true,
+      "entrypoint": "src/main.js",
+      "commands": "npm install",
+      "scopes": [
+        "users.read",
+        "users.write",
+        "databases.read",
+        "databases.write",
+        "rows.read",
+        "rows.write"
+      ],
+      "path": "appwrite-functions/fadfada-admin"
+    }
+  ],
+  "tablesDB": [
+    {
+      "$id": "fadfada_db",
+      "name": "Fadfada Database",
+      "enabled": true
+    }
+  ],
+  "buckets": [
+    {
+      "$id": "fadfada_media",
+      "name": "Fadfada Media",
+      "fileSecurity": true,
+      "enabled": true,
+      "maximumFileSize": 15728640,
+      "allowedFileExtensions": [
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
+        "gif",
+        "mp4",
+        "webm",
+        "mov",
+        "ogg",
+        "mp3",
+        "m4a"
+      ],
+      "compression": "none",
+      "encryption": true,
+      "antivirus": true,
+      "transformations": true,
+      "$permissions": [
+        "read(\"users\")",
+        "create(\"users\")",
+        "delete(\"users\")"
+      ]
+    }
+  ]
+}

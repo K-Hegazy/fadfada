@@ -1,0 +1,934 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Cloud Functions business logic (pure JS ESM)
+import {
+  BOOTSTRAPPED_OWNER_EMAIL,
+  deterministicRowId,
+  getSortedParticipants,
+  handleEconomyAction,
+  HttpError,
+  WHEEL_REWARDS,
+} from '../appwrite-functions/fadfada-economy/src/logic.js';
+import {
+  AdminHttpError,
+  handleAdminAction,
+} from '../appwrite-functions/fadfada-admin/src/logic.js';
+import type { UserProfile } from '../src/types/fadfada.js';
+import {
+  getGenderStyle,
+  normalizeGender,
+  sortOnlineUsers,
+} from '../src/utils/progression.js';
+import { sanitizeHttpUrl } from '../src/utils/formatters.js';
+
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+const TABLES = {
+  users: 'users',
+  userPrivate: 'user_private',
+  conversations: 'conversations',
+  messages: 'messages',
+  rooms: 'rooms',
+  roomMessages: 'room_messages',
+  stories: 'stories',
+  wallPosts: 'wall_posts',
+  wallComments: 'wall_comments',
+  creatorProposals: 'creator_proposals',
+  proposalComments: 'proposal_comments',
+  secrets: 'secrets',
+  secretComments: 'secret_comments',
+  storeItems: 'store_items',
+  dailyTasks: 'daily_tasks',
+  dailyClaims: 'daily_claims',
+  coinTransactions: 'coin_transactions',
+  shoutouts: 'shoutouts',
+  relationships: 'relationships',
+  marriages: 'marriages',
+  profileVisits: 'profile_visits',
+  notifications: 'notifications',
+  topupRequests: 'topup_requests',
+  reports: 'reports',
+  appeals: 'appeals',
+  supportTickets: 'support_tickets',
+  siteSettings: 'site_settings',
+  matchQueue: 'match_queue',
+  matchSessions: 'match_sessions',
+  matchMessages: 'match_messages',
+  matchCandidates: 'match_candidates',
+};
+
+function createInMemoryEnv() {
+  const db = new Map<string, Map<string, Record<string, unknown>>>();
+  const authUsers = new Map<string, { $id: string; email: string; name: string; phone?: string; emailVerification: boolean; labels: string[] }>();
+  let seq = 1;
+
+  const ensureTable = (tableId: string) => {
+    let map = db.get(tableId);
+    if (!map) {
+      map = new Map();
+      db.set(tableId, map);
+    }
+    return map;
+  };
+
+  const tablesDB = {
+    async getRow({ tableId, rowId }: { databaseId: string; tableId: string; rowId: string }) {
+      const row = ensureTable(tableId).get(rowId);
+      if (!row) {
+        const err = new Error(`Row not found: ${tableId}/${rowId}`) as Error & { code: number };
+        err.code = 404;
+        throw err;
+      }
+      return structuredClone(row);
+    },
+    async listRows({ tableId, queries = [] }: { databaseId: string; tableId: string; queries?: Array<{ type: string; field?: string; value?: unknown; limit?: number }> }) {
+      let rows = Array.from(ensureTable(tableId).values()).map((r) => structuredClone(r));
+      let limit = 100;
+      for (const q of queries) {
+        if (q?.type === 'equal' && q.field) {
+          rows = rows.filter((r) => r[q.field!] === q.value);
+        } else if (q?.type === 'greaterThanEqual' && q.field) {
+          rows = rows.filter((r) => String(r[q.field!] ?? '') >= String(q.value ?? ''));
+        } else if (q?.type === 'contains' && q.field) {
+          rows = rows.filter((r) => {
+            const val = r[q.field!];
+            if (Array.isArray(val)) return val.includes(q.value);
+            return String(val ?? '').includes(String(q.value ?? ''));
+          });
+        } else if (q?.type === 'limit' && typeof q.limit === 'number') {
+          limit = q.limit;
+        }
+      }
+      rows = rows.slice(0, limit);
+      return { total: rows.length, rows };
+    },
+    async createRow({ tableId, rowId, data, permissions }: { databaseId: string; tableId: string; rowId: string; data: Record<string, unknown>; permissions?: string[] }) {
+      const map = ensureTable(tableId);
+      const id = rowId === 'unique()' ? `row_${seq++}` : rowId;
+      if (map.has(id)) {
+        const err = new Error(`Conflict: ${tableId}/${id}`) as Error & { code: number };
+        err.code = 409;
+        throw err;
+      }
+      const now = new Date().toISOString();
+      const row = { $id: id, $createdAt: now, $updatedAt: now, $permissions: permissions ?? [], ...structuredClone(data) };
+      map.set(id, row);
+      return structuredClone(row);
+    },
+    async updateRow({ tableId, rowId, data }: { databaseId: string; tableId: string; rowId: string; data: Record<string, unknown> }) {
+      const map = ensureTable(tableId);
+      const existing = map.get(rowId);
+      if (!existing) {
+        const err = new Error(`Not found: ${tableId}/${rowId}`) as Error & { code: number };
+        err.code = 404;
+        throw err;
+      }
+      const updated = { ...existing, ...structuredClone(data), $updatedAt: new Date().toISOString() };
+      map.set(rowId, updated);
+      return structuredClone(updated);
+    },
+    async upsertRow({ tableId, rowId, data, permissions }: { databaseId: string; tableId: string; rowId: string; data: Record<string, unknown>; permissions?: string[] }) {
+      const map = ensureTable(tableId);
+      const existing = map.get(rowId);
+      if (existing) {
+        const updated = {
+          ...existing,
+          ...structuredClone(data),
+          ...(permissions ? { $permissions: permissions } : {}),
+          $updatedAt: new Date().toISOString(),
+        };
+        map.set(rowId, updated);
+        return structuredClone(updated);
+      }
+      return await tablesDB.createRow({ databaseId: 'fadfada_db', tableId, rowId, data, permissions });
+    },
+    async deleteRow({ tableId, rowId }: { databaseId: string; tableId: string; rowId: string }) {
+      ensureTable(tableId).delete(rowId);
+    },
+  };
+
+  const usersApi = {
+    async get({ userId }: { userId: string }) {
+      const u = authUsers.get(userId);
+      if (!u) {
+        const err = new Error(`User not found: ${userId}`) as Error & { code: number };
+        err.code = 404;
+        throw err;
+      }
+      return structuredClone(u);
+    },
+    async updateLabels({ userId, labels }: { userId: string; labels: string[] }) {
+      const u = authUsers.get(userId);
+      if (u) u.labels = [...labels];
+      return u;
+    },
+  };
+
+  const Permission = {
+    read: (role: string) => `read("${role}")`,
+    update: (role: string) => `update("${role}")`,
+    delete: (role: string) => `delete("${role}")`,
+  };
+  const Role = {
+    any: () => 'any',
+    users: () => 'users',
+    user: (id: string) => `user:${id}`,
+    label: (lbl: string) => `label:${lbl}`,
+  };
+  const ID = {
+    unique: () => 'unique()',
+  };
+  const Query = {
+    equal: (field: string, value: unknown) => ({ type: 'equal', field, value }),
+    greaterThanEqual: (field: string, value: unknown) => ({ type: 'greaterThanEqual', field, value }),
+    contains: (field: string, value: unknown) => ({ type: 'contains', field, value }),
+    limit: (limit: number) => ({ type: 'limit', limit }),
+  };
+
+  return {
+    db,
+    authUsers,
+    tablesDB,
+    usersApi,
+    economyCtx: (callerUid: string, action: string, payload: Record<string, unknown> = {}) => ({
+      callerUid,
+      action,
+      payload,
+      tablesDB,
+      usersApi,
+      databaseId: 'fadfada_db',
+      tables: TABLES,
+      Permission,
+      Role,
+      ID,
+      Query,
+    }),
+    adminCtx: (callerUid: string, action: string, payload: Record<string, unknown> = {}) => ({
+      callerUid,
+      action,
+      payload,
+      tablesDB,
+      usersApi,
+      databaseId: 'fadfada_db',
+      tables: TABLES,
+      Permission,
+      Role,
+      ID,
+    }),
+  };
+}
+
+function walkFiles(dir: string): string[] {
+  const results: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...walkFiles(full));
+    } else if (/\.(ts|tsx|js|jsx|json|html)$/.test(entry.name)) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+test('Static migration audit: zero Firebase, Supabase, Vercel, or forbidden browser popups', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8')) as {
+    dependencies: Record<string, string>;
+    devDependencies: Record<string, string>;
+  };
+  const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+  for (const depName of Object.keys(allDeps)) {
+    assert.ok(!depName.includes('firebase'), `Unexpected Firebase package: ${depName}`);
+    assert.ok(!depName.includes('supabase'), `Unexpected Supabase package: ${depName}`);
+    assert.ok(!depName.includes('vercel'), `Unexpected Vercel package: ${depName}`);
+  }
+  assert.ok(allDeps.appwrite, 'appwrite client SDK must be installed');
+  assert.ok(allDeps['node-appwrite'], 'node-appwrite SDK must be installed');
+
+  const srcFiles = walkFiles(path.join(ROOT_DIR, 'src'));
+  const forbiddenPatterns = [
+    /firebase/i,
+    /firestore/i,
+    /supabase/i,
+    /vercel/i,
+    /\.toMillis\(/,
+    /isMediaUploadAvailable/,
+    /getMediaUnavailableReason/,
+    /UnavailableMediaProvider/,
+    /\bwindow\.(alert|confirm|open)\b/,
+    /owner@fadfada\.app/i,
+    /hegazymr6@gmail\.com/i,
+  ];
+
+  for (const file of srcFiles) {
+    const content = fs.readFileSync(file, 'utf8');
+    for (const pattern of forbiddenPatterns) {
+      assert.ok(
+        !pattern.test(content),
+        `Forbidden pattern ${pattern} found in ${path.relative(ROOT_DIR, file)}`
+      );
+    }
+  }
+
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite.json')), 'appwrite.json must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'scripts', 'setup-appwrite.ts')), 'scripts/setup-appwrite.ts must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'fadfada-economy', 'src', 'main.js')));
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'fadfada-admin', 'src', 'main.js')));
+
+  // Ensure owner password is never hardcoded in source files or scripts
+  const forbiddenSecret = ['Fadfada', '@2026!', 'Owner'].join('');
+  const allAuditFiles = [
+    ...srcFiles,
+    ...walkFiles(path.join(ROOT_DIR, 'appwrite-functions')),
+    ...walkFiles(path.join(ROOT_DIR, 'scripts')),
+  ];
+  for (const file of allAuditFiles) {
+    const content = fs.readFileSync(file, 'utf8');
+    assert.ok(
+      !content.includes(forbiddenSecret),
+      `Hardcoded owner password found in ${path.relative(ROOT_DIR, file)}`
+    );
+  }
+
+  const authScreenCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'components', 'AuthScreen.tsx'), 'utf8');
+  assert.ok(authScreenCode.includes('الدخول بحساب المالك'), 'AuthScreen must include owner login option');
+  assert.equal(BOOTSTRAPPED_OWNER_EMAIL, 'owner@fadfada.app');
+});
+
+test('deterministicRowId produces <=32 char valid Appwrite IDs and preserves pair symmetry', () => {
+  const longUidA = '67a9f2d8c4b1e0098123456789abcdef';
+  const longUidB = '67a9f2d8c4b1e0098fedcba987654321';
+  const [p1, p2] = getSortedParticipants(longUidB, longUidA);
+  const id1 = deterministicRowId('c', `${p1}_${p2}`);
+  const id2 = deterministicRowId('c', `${longUidA}_${longUidB}`);
+  assert.equal(id1, id2);
+  assert.ok(id1.length <= 32, `ID too long: ${id1.length}`);
+  assert.match(id1, /^[a-zA-Z0-9_]+$/);
+});
+
+test('Owner bootstrap requires verified owner email and isolates PII in user_private', async () => {
+  const env = createInMemoryEnv();
+
+  // Unverified spoof attempt must NOT become owner
+  env.authUsers.set('spoof_uid', {
+    $id: 'spoof_uid',
+    email: BOOTSTRAPPED_OWNER_EMAIL,
+    name: 'Spoof',
+    emailVerification: false,
+    labels: [],
+  });
+  const spoofProfile = await handleEconomyAction(env.economyCtx('spoof_uid', 'ensureProfile'));
+  assert.equal(spoofProfile.role, 'member');
+  assert.equal(spoofProfile.coins, 50);
+  assert.equal(env.authUsers.get('spoof_uid')?.labels.includes('staff'), false);
+
+  // Regular member profile must NOT receive owner role or permissions
+  env.authUsers.set('regular_member', {
+    $id: 'regular_member',
+    email: 'member@example.com',
+    name: 'Regular Member',
+    emailVerification: true,
+    labels: [],
+  });
+  const memberProfile = await handleEconomyAction(env.economyCtx('regular_member', 'ensureProfile'));
+  assert.equal(memberProfile.role, 'member');
+  assert.deepEqual(memberProfile.permissions, []);
+  assert.equal(env.authUsers.get('regular_member')?.labels.includes('staff'), false);
+
+  // Verified owner bootstrap succeeds for owner@fadfada.app
+  env.authUsers.set('owner_uid', {
+    $id: 'owner_uid',
+    email: BOOTSTRAPPED_OWNER_EMAIL,
+    name: 'Mina Owner',
+    emailVerification: true,
+    labels: [],
+  });
+  const ownerProfile = await handleEconomyAction(env.economyCtx('owner_uid', 'ensureProfile'));
+  assert.equal(ownerProfile.role, 'owner');
+  assert.equal(ownerProfile.coins, 5000);
+  assert.ok(Array.isArray(ownerProfile.permissions) && ownerProfile.permissions.includes('*'));
+  assert.equal(env.authUsers.get('owner_uid')?.labels.includes('staff'), true);
+
+  // Public users row does NOT contain email; user_private does with owner-only read permission
+  assert.equal('email' in ownerProfile, false);
+  const privateRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'user_private', rowId: 'owner_uid' });
+  assert.equal(privateRow.email, BOOTSTRAPPED_OWNER_EMAIL);
+  assert.deepEqual(privateRow.$permissions, ['read("user:owner_uid")']);
+});
+
+test('Guest validation (18+/Terms), economy feature locks (403), and Member upgrade', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('guest_underage', {
+    $id: 'guest_underage',
+    email: '',
+    name: '',
+    emailVerification: false,
+    labels: [],
+  });
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('guest_underage', 'ensureProfile', {
+          guestProfile: { displayName: 'قاصر', age: 16, gender: 'male', acceptedTerms: true },
+        })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 400
+  );
+
+  env.authUsers.set('guest_1', {
+    $id: 'guest_1',
+    email: '',
+    name: '',
+    emailVerification: false,
+    labels: [],
+  });
+  const initial = await handleEconomyAction(
+    env.economyCtx('guest_1', 'ensureProfile', {
+      guestProfile: { displayName: 'زائر كريم', age: 23, gender: 'female', acceptedTerms: true },
+    })
+  );
+  assert.equal(initial.role, 'guest');
+  assert.equal(initial.isAnonymous, true);
+  assert.equal(initial.age, 23);
+  assert.equal(initial.gender, 'female');
+  assert.equal(initial.acceptedTerms, true);
+  assert.equal(initial.country, '');
+
+  // Guest blocked from store, gifts, transfer, daily rewards, shoutout, createMemberRoom
+  for (const [act, payload] of [
+    ['purchaseStoreItem', { itemId: 'vip_silver' }],
+    ['claimDailyReward', { taskKey: 'checkin' }],
+    ['postShoutout', { text: 'تجربة ضيف' }],
+    ['createMemberRoom', { name: 'غرفة ضيف' }],
+    ['transferCoins', { recipientId: 'guest_underage', amount: 10 }],
+  ] as const) {
+    await assert.rejects(
+      () => handleEconomyAction(env.economyCtx('guest_1', act, payload as Record<string, unknown>)),
+      (err: unknown) => err instanceof HttpError && err.status === 403
+    );
+  }
+
+  // Simulate linking email
+  env.authUsers.get('guest_1')!.email = 'upgraded@example.com';
+  const upgraded = await handleEconomyAction(env.economyCtx('guest_1', 'ensureProfile'));
+  assert.equal(upgraded.role, 'member');
+  assert.equal(upgraded.isAnonymous, false);
+});
+
+test('Server-authoritative store purchase ignores client price spoofing and blocks insufficient coins', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('u1', {
+    $id: 'u1',
+    email: 'u1@example.com',
+    name: 'Ahmed',
+    emailVerification: true,
+    labels: [],
+  });
+  await handleEconomyAction(env.economyCtx('u1', 'ensureProfile'));
+
+  // u1 only has 50 coins; even if payload claims priceCoins=1, vip_silver costs 300
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('u1', 'purchaseStoreItem', { itemId: 'vip_silver', priceCoins: 1 })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 400
+  );
+
+  // Grant 400 coins via owner topup approval and verify server deducts 300 -> 150
+  env.authUsers.set('owner_1', {
+    $id: 'owner_1',
+    email: BOOTSTRAPPED_OWNER_EMAIL,
+    name: 'Owner',
+    emailVerification: true,
+    labels: ['staff'],
+  });
+  await handleEconomyAction(env.economyCtx('owner_1', 'ensureProfile'));
+  const reqRow = await handleEconomyAction(
+    env.economyCtx('u1', 'submitTopupRequest', {
+      method: 'InstaPay',
+      amount: 40,
+      coinsRequested: 400,
+      reference: 'TX-99',
+    })
+  );
+  await handleAdminAction(
+    env.adminCtx('owner_1', 'reviewTopupRequest', {
+      requestId: reqRow.$id,
+      approve: true,
+      adminNote: 'OK',
+    })
+  );
+
+  const afterPurchase = await handleEconomyAction(
+    env.economyCtx('u1', 'purchaseStoreItem', { itemId: 'vip_silver', priceCoins: 1 })
+  );
+  assert.equal(afterPurchase.coins, 150);
+  assert.equal(afterPurchase.vipTier, 'silver');
+});
+
+test('Coin transfers, duplicate daily rewards, gifts, and marriage dowry fee enforcement', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('alice', { $id: 'alice', email: 'alice@example.com', name: 'Alice', emailVerification: true, labels: [] });
+  env.authUsers.set('bob', { $id: 'bob', email: 'bob@example.com', name: 'Bob', emailVerification: true, labels: [] });
+  await handleEconomyAction(env.economyCtx('alice', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('bob', 'ensureProfile'));
+
+  // Reject self transfer & negative transfer
+  await assert.rejects(() =>
+    handleEconomyAction(env.economyCtx('alice', 'transferCoins', { recipientId: 'alice', amount: 10 }))
+  );
+  await assert.rejects(() =>
+    handleEconomyAction(env.economyCtx('alice', 'transferCoins', { recipientId: 'bob', amount: -20 }))
+  );
+
+  // Incomplete daily task cannot be claimed before action
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('alice', 'claimDailyReward', { taskKey: 'engage' })),
+    (err: unknown) => err instanceof HttpError && err.status === 400
+  );
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('alice', 'claimDailyReward', { taskKey: 'share' })),
+    (err: unknown) => err instanceof HttpError && err.status === 400
+  );
+
+  // Daily checkin claims once per day (+35 => 85 coins)
+  const claim1 = await handleEconomyAction(env.economyCtx('alice', 'claimDailyReward', { taskKey: 'checkin' }));
+  assert.equal(claim1.rewardCoins, 35);
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('alice', 'claimDailyReward', { taskKey: 'checkin' })),
+    (err: unknown) => err instanceof HttpError && err.status === 409
+  );
+
+  // Perform real engage + share actions then claim
+  await handleEconomyAction(env.economyCtx('alice', 'sendPrivateMessage', { recipientId: 'bob', text: 'مرحبًا بوب' }));
+  await handleEconomyAction(env.economyCtx('alice', 'recordDailyTaskActivity', { kind: 'share' }));
+  const claimEngage = await handleEconomyAction(env.economyCtx('alice', 'claimDailyReward', { taskKey: 'engage' }));
+  const claimShare = await handleEconomyAction(env.economyCtx('alice', 'claimDailyReward', { taskKey: 'share' }));
+  assert.equal(claimEngage.rewardCoins, 45);
+  assert.equal(claimShare.rewardCoins, 40);
+
+  const progress = await handleEconomyAction(env.economyCtx('alice', 'getDailyTaskProgress'));
+  assert.equal((progress.claimedByKey as Record<string, boolean>).checkin, true);
+  assert.equal((progress.claimedByKey as Record<string, boolean>).engage, true);
+  assert.equal((progress.claimedByKey as Record<string, boolean>).share, true);
+
+  // Alice now has 170 coins (50 + 35 + 45 + 40); propose marriage to Bob with 60 dowry (20% site fee -> wifeShare=48)
+  await handleEconomyAction(
+    env.economyCtx('alice', 'proposeMarriage', { partnerId: 'bob', dowry: 60, message: 'Hello' })
+  );
+  const marriageId = deterministicRowId('m', `${getSortedParticipants('alice', 'bob').join('_')}`);
+  const acceptRes = await handleEconomyAction(
+    env.economyCtx('bob', 'respondMarriage', { marriageId, accept: true })
+  );
+  assert.equal(acceptRes.accepted, true);
+
+  const aliceRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'alice' });
+  const bobRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'bob' });
+  assert.equal(aliceRow.coins, 110); // 170 - 60
+  assert.equal(bobRow.coins, 98); // 50 + 48
+  assert.equal(aliceRow.maritalStatus, 'married');
+  assert.equal(bobRow.maritalStatus, 'married');
+});
+
+test('RBAC: moderator restrictions, owner-only controls, and banned user appeals', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('owner', { $id: 'owner', email: BOOTSTRAPPED_OWNER_EMAIL, name: 'Owner', emailVerification: true, labels: [] });
+  env.authUsers.set('mod', { $id: 'mod', email: 'mod@example.com', name: 'Mod', emailVerification: true, labels: [] });
+  env.authUsers.set('user', { $id: 'user', email: 'user@example.com', name: 'Member', emailVerification: true, labels: [] });
+
+  await handleEconomyAction(env.economyCtx('owner', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('mod', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('user', 'ensureProfile'));
+
+  // Promote mod via owner
+  await handleAdminAction(env.adminCtx('owner', 'adminUpdateUser', { targetUid: 'mod', updates: { role: 'moderator' } }));
+  assert.equal(env.authUsers.get('mod')?.labels.includes('staff'), true);
+
+  // Regular user cannot call admin actions
+  await assert.rejects(
+    () => handleAdminAction(env.adminCtx('user', 'adminUpdateUser', { targetUid: 'user', updates: { coins: 99999 } })),
+    (err: unknown) => err instanceof AdminHttpError && err.status === 403
+  );
+
+  // Moderator cannot change role/coins/vip/settings or edit owner
+  await assert.rejects(
+    () => handleAdminAction(env.adminCtx('mod', 'adminUpdateUser', { targetUid: 'user', updates: { coins: 5000 } })),
+    (err: unknown) => err instanceof AdminHttpError && err.status === 403
+  );
+  await assert.rejects(
+    () => handleAdminAction(env.adminCtx('mod', 'adminUpdateUser', { targetUid: 'owner', updates: { isBanned: true } })),
+    (err: unknown) => err instanceof AdminHttpError && err.status === 403
+  );
+  await assert.rejects(
+    () => handleAdminAction(env.adminCtx('mod', 'updateSiteSettings', { settings: { shoutoutCost: 1 } })),
+    (err: unknown) => err instanceof AdminHttpError && err.status === 403
+  );
+
+  // Moderator CAN ban a regular member; banned user is blocked from economy/match but CAN submit an appeal
+  await handleAdminAction(
+    env.adminCtx('mod', 'adminUpdateUser', { targetUid: 'user', updates: { isBanned: true, banReason: 'Spam' } })
+  );
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('user', 'transferCoins', { recipientId: 'mod', amount: 10 })),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+  const appeal = await handleEconomyAction(
+    env.economyCtx('user', 'submitAppeal', { reason: 'أرجو مراجعة قرار الحظر' })
+  );
+  assert.equal(appeal.status, 'pending');
+
+  // Review appeal -> unbans user
+  await handleAdminAction(
+    env.adminCtx('mod', 'reviewAppeal', { appealId: appeal.$id, accept: true, adminNote: 'تم القبول' })
+  );
+  const unbannedUser = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'user' });
+  assert.equal(unbannedUser.isBanned, false);
+});
+
+test('Random matchmaking skips stale queue entries (>5 min) and pairs compatible active users', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('u1', { $id: 'u1', email: 'u1@example.com', name: 'U1', emailVerification: true, labels: [] });
+  env.authUsers.set('u2', { $id: 'u2', email: 'u2@example.com', name: 'U2', emailVerification: true, labels: [] });
+  await handleEconomyAction(env.economyCtx('u1', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('u2', 'ensureProfile'));
+
+  // Insert stale queue entry
+  await env.tablesDB.createRow({
+    databaseId: 'fadfada_db',
+    tableId: 'match_queue',
+    rowId: 'stale_uid',
+    data: {
+      uid: 'stale_uid',
+      displayName: 'Stale',
+      gender: 'unspecified',
+      country: 'مصر',
+      mode: 'text',
+      preferredGender: 'all',
+      preferredCountry: '',
+      status: 'waiting',
+      sessionId: '',
+      createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    },
+  });
+
+  // u1 joins -> skips stale entry, enters queue waiting
+  const res1 = await handleEconomyAction(
+    env.economyCtx('u1', 'joinRandomMatch', { mode: 'text', preferredGender: 'all' })
+  );
+  assert.equal(res1.matchedSessionId, null);
+
+  // u2 joins -> immediately matches u1
+  const res2 = await handleEconomyAction(
+    env.economyCtx('u2', 'joinRandomMatch', { mode: 'text', preferredGender: 'all' })
+  );
+  assert.ok(res2.matchedSessionId, 'u2 should match with waiting u1');
+
+  const session = await env.tablesDB.getRow({
+    databaseId: 'fadfada_db',
+    tableId: 'match_sessions',
+    rowId: String(res2.matchedSessionId),
+  });
+  assert.equal(session.status, 'active');
+  assert.deepEqual(session.participantIds, getSortedParticipants('u1', 'u2'));
+
+  // Session participants can send match messages; third parties cannot
+  await handleEconomyAction(
+    env.economyCtx('u1', 'sendMatchMessage', { sessionId: session.$id, text: 'أهلًا في المطابقة' })
+  );
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('u1', 'sendPrivateMessage', { recipientId: 'u1', text: 'bad' })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 400
+  );
+});
+
+test('Server-authoritative sendPrivateMessage sets strict 2-party row permissions and enforces privacy', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('sender_1', { $id: 'sender_1', email: 's@example.com', name: 'Sender', emailVerification: true, labels: [] });
+  env.authUsers.set('recv_1', { $id: 'recv_1', email: 'r@example.com', name: 'Receiver', emailVerification: true, labels: [] });
+  await handleEconomyAction(env.economyCtx('sender_1', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('recv_1', 'ensureProfile'));
+
+  const dmRes = await handleEconomyAction(
+    env.economyCtx('sender_1', 'sendPrivateMessage', { recipientId: 'recv_1', text: 'مرحبًا بك' })
+  );
+  assert.ok(dmRes.messageId);
+  assert.ok(dmRes.conversationId);
+
+  const msgRow = await env.tablesDB.getRow({
+    databaseId: 'fadfada_db',
+    tableId: 'messages',
+    rowId: String(dmRes.messageId),
+  });
+  assert.deepEqual(msgRow.$permissions, [
+    'read("user:recv_1")',
+    'read("user:sender_1")',
+    'update("user:recv_1")',
+    'update("user:sender_1")',
+  ]);
+
+  // Privacy = nobody blocks non-staff sender
+  await env.tablesDB.updateRow({
+    databaseId: 'fadfada_db',
+    tableId: 'users',
+    rowId: 'recv_1',
+    data: { privacyJson: JSON.stringify({ messagePermission: 'nobody' }) },
+  });
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('sender_1', 'sendPrivateMessage', { recipientId: 'recv_1', text: 'blocked' })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+
+  // Privacy = friends blocks non-friends, then allows once accepted via deterministic 'r' row ID
+  await env.tablesDB.updateRow({
+    databaseId: 'fadfada_db',
+    tableId: 'users',
+    rowId: 'recv_1',
+    data: { privacyJson: JSON.stringify({ messagePermission: 'friends' }) },
+  });
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('sender_1', 'sendPrivateMessage', { recipientId: 'recv_1', text: 'not friends yet' })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+
+  await handleEconomyAction(env.economyCtx('sender_1', 'sendFriendRequest', { targetUid: 'recv_1' }));
+  const [f1, f2] = getSortedParticipants('sender_1', 'recv_1');
+  const relId = deterministicRowId('r', `${f1}_${f2}`);
+  await handleEconomyAction(env.economyCtx('recv_1', 'respondFriendRequest', { relationshipId: relId, accept: true }));
+
+  const contactDm = await handleEconomyAction(
+    env.economyCtx('sender_1', 'sendPrivateMessage', {
+      recipientId: 'recv_1',
+      text: 'بطاقة تواصل',
+      type: 'contact',
+    })
+  );
+  const contactRow = await env.tablesDB.getRow({
+    databaseId: 'fadfada_db',
+    tableId: 'messages',
+    rowId: String(contactDm.messageId),
+  });
+  assert.equal(contactRow.type, 'contact');
+
+  const alertDm = await handleEconomyAction(
+    env.economyCtx('sender_1', 'sendPrivateMessage', {
+      recipientId: 'recv_1',
+      text: 'تنبيه لقطة شاشة',
+      type: 'screenshot_alert',
+    })
+  );
+  const alertRow = await env.tablesDB.getRow({
+    databaseId: 'fadfada_db',
+    tableId: 'messages',
+    rowId: String(alertDm.messageId),
+  });
+  assert.equal(alertRow.type, 'screenshot_alert');
+
+  // Edit, View-Once & Delete Private Messages
+  const edited = await handleEconomyAction(
+    env.economyCtx('sender_1', 'editPrivateMessage', { messageId: String(dmRes.messageId), text: 'نص معدّل' })
+  );
+  assert.equal(edited.text, 'نص معدّل');
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('recv_1', 'editPrivateMessage', { messageId: String(dmRes.messageId), text: 'اختراق' })),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+
+  const viewOnceDm = await handleEconomyAction(
+    env.economyCtx('sender_1', 'sendPrivateMessage', {
+      recipientId: 'recv_1',
+      text: 'فيديو مرة واحدة',
+      type: 'video',
+      mediaUrl: 'https://example.com/clip.mp4',
+      isViewOnce: true,
+    })
+  );
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('sender_1', 'consumeViewOnceMessage', { messageId: String(viewOnceDm.messageId) })),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+  const openedOnce = await handleEconomyAction(
+    env.economyCtx('recv_1', 'consumeViewOnceMessage', { messageId: String(viewOnceDm.messageId) })
+  );
+  assert.equal(openedOnce.mediaUrl, 'https://example.com/clip.mp4');
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('recv_1', 'consumeViewOnceMessage', { messageId: String(viewOnceDm.messageId) })),
+    (err: unknown) => err instanceof HttpError && err.status === 410
+  );
+
+  const deletedDm = await handleEconomyAction(
+    env.economyCtx('sender_1', 'deletePrivateMessage', { messageId: String(dmRes.messageId) })
+  );
+  assert.equal(deletedDm.isDeleted, true);
+});
+
+test('Daily wheel claim, verified daily tasks, rich room messages & leaveRoom membership lock', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('owner_r', { $id: 'owner_r', email: 'or@example.com', name: 'OwnerR', emailVerification: true, labels: [] });
+  env.authUsers.set('guest_r', { $id: 'guest_r', email: 'gr@example.com', name: 'GuestR', emailVerification: true, labels: [] });
+  await handleEconomyAction(env.economyCtx('owner_r', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('guest_r', 'ensureProfile'));
+
+  // Wheel spin matches WHEEL_REWARDS[wheelIndex]
+  const wheelRes = await handleEconomyAction(env.economyCtx('owner_r', 'claimDailyReward', { taskKey: 'daily_wheel' }));
+  assert.equal(typeof wheelRes.wheelIndex, 'number');
+  const expectedSeg = WHEEL_REWARDS[Number(wheelRes.wheelIndex)];
+  assert.ok(expectedSeg, 'wheelIndex must map to WHEEL_REWARDS');
+  assert.equal(wheelRes.rewardCoins, expectedSeg.coins);
+  assert.equal(wheelRes.rewardXp, expectedSeg.xp);
+
+  // Complete real actions to earn >= 150 coins before creating a room
+  await handleEconomyAction(env.economyCtx('owner_r', 'sendPrivateMessage', { recipientId: 'guest_r', text: 'مرحبًا' }));
+  await handleEconomyAction(env.economyCtx('owner_r', 'recordDailyTaskActivity', { kind: 'share' }));
+  await handleEconomyAction(env.economyCtx('owner_r', 'recordDailyTaskActivity', { kind: 'ad_watch' }));
+  for (const key of ['checkin', 'engage', 'share', 'ad_watch']) {
+    await handleEconomyAction(env.economyCtx('owner_r', 'claimDailyReward', { taskKey: key }));
+  }
+  const { roomId } = await handleEconomyAction(
+    env.economyCtx('owner_r', 'createMemberRoom', {
+      name: 'غرفة الأصدقاء',
+      description: 'وصف الغرفة',
+      category: 'عام',
+      theme: 'emerald',
+    })
+  );
+
+  // guest_r joins and sends rich room message + view-once + reactions
+  const joinRes = await handleEconomyAction(env.economyCtx('guest_r', 'joinRoom', { roomId }));
+  assert.equal(joinRes.activeCount, 2);
+
+  const rMsg = await handleEconomyAction(
+    env.economyCtx('owner_r', 'sendRoomMessage', {
+      roomId,
+      text: 'صورة للمشاهدة مرة واحدة',
+      type: 'image',
+      mediaUrl: 'https://example.com/pic.png',
+      isViewOnce: true,
+    })
+  );
+  const reacted = await handleEconomyAction(
+    env.economyCtx('guest_r', 'toggleRoomMessageReaction', { messageId: String(rMsg.$id), emoji: '❤️' })
+  );
+  assert.ok(String(reacted.reactionsJson).includes('guest_r'));
+
+  const roomOpened = await handleEconomyAction(
+    env.economyCtx('guest_r', 'consumeRoomViewOnce', { messageId: String(rMsg.$id) })
+  );
+  assert.equal(roomOpened.mediaUrl, 'https://example.com/pic.png');
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('guest_r', 'consumeRoomViewOnce', { messageId: String(rMsg.$id) })),
+    (err: unknown) => err instanceof HttpError && err.status === 410
+  );
+
+  const editedRoomMsg = await handleEconomyAction(
+    env.economyCtx('owner_r', 'editRoomMessage', { messageId: String(rMsg.$id), text: 'تم تحديث التسمية' })
+  );
+  assert.equal(editedRoomMsg.text, 'تم تحديث التسمية');
+
+  // Non-owner cannot update room metadata
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('guest_r', 'updateRoomMeta', { roomId, pinnedMessage: 'اختراق' })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+
+  // Owner updates room metadata
+  const updateRes = await handleEconomyAction(
+    env.economyCtx('owner_r', 'updateRoomMeta', { roomId, pinnedMessage: 'رسالة مثبتة جديدة', theme: 'amber' })
+  );
+  assert.equal(updateRes.ok, true);
+  const roomRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'rooms', rowId: String(roomId) });
+  assert.equal(roomRow.pinnedMessage, 'رسالة مثبتة جديدة');
+  assert.equal(roomRow.theme, 'amber');
+
+  // Leave room -> member removed without deleting room, and sending while not a member is blocked (403)
+  const leaveRes = await handleEconomyAction(env.economyCtx('guest_r', 'leaveRoom', { roomId }));
+  assert.equal(leaveRes.activeCount, 1);
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('guest_r', 'sendRoomMessage', { roomId, text: 'بعد المغادرة' })),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+});
+
+test('sortOnlineUsers prioritizes self country (female->male), then other countries (female->male), missing country last', () => {
+  const sample = [
+    { uid: 'no_country_m', displayName: 'A', country: '', gender: 'male' as const, isOnline: true },
+    { uid: 'other_m', displayName: 'B', country: 'السعودية', gender: 'male' as const, isOnline: true },
+    { uid: 'other_f', displayName: 'C', country: 'السعودية', gender: 'female' as const, isOnline: true },
+    { uid: 'same_m', displayName: 'D', country: 'مصر', gender: 'male' as const, isOnline: true },
+    { uid: 'same_f', displayName: 'E', country: 'مصر', gender: 'female' as const, isOnline: true },
+    { uid: 'no_country_f', displayName: 'F', country: 'دولة غير محددة', gender: 'female' as const, isOnline: true },
+  ] as unknown as UserProfile[];
+  const sorted = sortOnlineUsers(
+    sample,
+    { country: 'مصر' } as UserProfile,
+    (u) => Boolean(u.isOnline),
+    () => 0
+  ).map((u) => u.uid);
+  assert.deepEqual(sorted, ['same_f', 'same_m', 'other_f', 'other_m', 'no_country_f', 'no_country_m']);
+});
+
+test('getGenderStyle maps female/male/unspecified consistently to Rose, Blue, and Neutral styles', () => {
+  const female = getGenderStyle('female');
+  assert.equal(female.gender, 'female');
+  assert.equal(female.label, 'أنثى');
+  assert.match(female.cardClass, /rose-/);
+  assert.match(female.avatarRingClass, /rose-/);
+  assert.match(female.badgeClass, /rose-/);
+  assert.equal(getGenderStyle('أنثى').gender, 'female');
+
+  const male = getGenderStyle('male');
+  assert.equal(male.gender, 'male');
+  assert.equal(male.label, 'ذكر');
+  assert.match(male.cardClass, /sky-/);
+  assert.match(male.avatarRingClass, /sky-/);
+  assert.match(male.badgeClass, /sky-/);
+  assert.equal(getGenderStyle('ذكر').gender, 'male');
+
+  for (const raw of ['', undefined, 'unspecified', 'other']) {
+    const neutral = getGenderStyle(raw);
+    assert.equal(normalizeGender(raw), 'unspecified');
+    assert.equal(neutral.gender, 'unspecified');
+    assert.equal(neutral.label, 'غير محدد');
+    assert.ok(!/rose-|sky-/.test(neutral.cardClass));
+    assert.ok(!/rose-|sky-/.test(neutral.badgeClass));
+  }
+});
+
+test('sanitizeHttpUrl blocks unsafe schemes and production hosting assets exist', () => {
+  assert.equal(sanitizeHttpUrl('javascript:alert(1)'), '');
+  assert.equal(sanitizeHttpUrl('vbscript:msgbox(1)'), '');
+  assert.equal(sanitizeHttpUrl('data:text/html,<script>alert(1)</script>'), '');
+  assert.equal(sanitizeHttpUrl('//evil.example/path'), '');
+  assert.equal(sanitizeHttpUrl('https://fadfada.app/promo?ref=1'), 'https://fadfada.app/promo?ref=1');
+  assert.equal(sanitizeHttpUrl('http://example.com'), 'http://example.com/');
+  assert.equal(sanitizeHttpUrl('/assets/pic.webp', { allowRelative: true }), '/assets/pic.webp');
+  assert.equal(sanitizeHttpUrl('//evil.example', { allowRelative: true }), '');
+  assert.equal(sanitizeHttpUrl('blob:https://fadfada.app/123', { allowBlob: true }), 'blob:https://fadfada.app/123');
+
+  const adSlotCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'components', 'AdSlot.tsx'), 'utf8');
+  const viewerCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'components', 'MediaViewerModal.tsx'), 'utf8');
+  assert.ok(adSlotCode.includes('sanitizeHttpUrl'), 'AdSlot must sanitize targetUrl');
+  assert.ok(viewerCode.includes('sanitizeHttpUrl'), 'MediaViewerModal must sanitize media url');
+
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'public', '_redirects')), 'public/_redirects must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'public', '_headers')), 'public/_headers must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'public', 'favicon.svg')), 'public/favicon.svg must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'vercel.json')), 'vercel.json must exist');
+});
+

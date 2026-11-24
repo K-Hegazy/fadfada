@@ -1,0 +1,6 @@
+{
+  "name": "فضفضة (Fadfada)",
+  "description": "منصة تواصل اجتماعي عربية فورية بمراسلة خاصة آمنة وحالة اتصال لحظية عبر Appwrite.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
