@@ -1,0 +1,30 @@
+
+name: Appwrite Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Deploy Appwrite
+        env:
+          VITE_APPWRITE_ENDPOINT: https://fra.cloud.appwrite.io/v1
+          VITE_APPWRITE_PROJECT_ID: 6b022cc5002da26b7487
+          APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
+        run: bun run appwrite:setup
+
+      - name: Verify deployment
+        env:
+          VITE_APPWRITE_ENDPOINT: https://fra.cloud.appwrite.io/v1
+          VITE_APPWRITE_PROJECT_ID: 6b022cc5002da26b7487
+          APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
+        run: bun run appwrite:verify-live
