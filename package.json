@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit && eslint .",
     "test": "tsx --test scripts/appwrite-verify.test.ts",
     "appwrite:setup": "tsx scripts/setup-appwrite.ts",
-    "appwrite:verify-live": "tsx scripts/appwrite-live-verify.ts"
+    "appwrite:verify-live": "tsx scripts/appwrite-live-verify.ts",
+    "appwrite:cleanup": "tsx scripts/cleanup-old-messages.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

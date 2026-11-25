@@ -1050,15 +1050,6 @@ async function run(): Promise<void> {
       schedule: '',
       timeout: 15,
     },
-    {
-      key: 'cleanupFunctionId' as const,
-      preferredId: 'cleanup-old-messages',
-      name: 'cleanup-old-messages',
-      dir: path.resolve(process.cwd(), 'appwrite-functions', 'cleanup-old-messages'),
-      execute: [] as string[],
-      schedule: '*/15 * * * *',
-      timeout: 60,
-    },
   ];
 
   const fnScopes: ProjectKeyScopes[] = [
@@ -1073,10 +1064,9 @@ async function run(): Promise<void> {
     ProjectKeyScopes.FilesWrite,
   ];
 
-  const actualFunctionIds: Record<'economyFunctionId' | 'adminFunctionId' | 'cleanupFunctionId', string> = {
+  const actualFunctionIds: Record<'economyFunctionId' | 'adminFunctionId', string> = {
     economyFunctionId: '',
     adminFunctionId: '',
-    cleanupFunctionId: '',
   };
 
   for (const fn of functionSpecs) {
@@ -1293,12 +1283,14 @@ async function run(): Promise<void> {
     if (appwriteCfg.buckets?.[0]) appwriteCfg.buckets[0].$id = actualBucketId;
     if (appwriteCfg.functions?.[0]) appwriteCfg.functions[0].$id = actualFunctionIds.economyFunctionId;
     if (appwriteCfg.functions?.[1]) appwriteCfg.functions[1].$id = actualFunctionIds.adminFunctionId;
-    if (appwriteCfg.functions?.[2]) appwriteCfg.functions[2].$id = actualFunctionIds.cleanupFunctionId;
+    if (appwriteCfg.functions && appwriteCfg.functions.length > 2) {
+      appwriteCfg.functions = appwriteCfg.functions.slice(0, 2);
+    }
     fs.writeFileSync(appwriteJsonPath, `${JSON.stringify(appwriteCfg, null, 2)}\n`, 'utf8');
   }
 
   console.log(
-    `Appwrite setup completed: DB=${actualDatabaseId}, Tables=${Object.keys(tableIdsBySnake).length}, Bucket=${actualBucketId}, Functions=${actualFunctionIds.economyFunctionId}, ${actualFunctionIds.adminFunctionId}, ${actualFunctionIds.cleanupFunctionId}`
+    `Appwrite setup completed: DB=${actualDatabaseId}, Tables=${Object.keys(tableIdsBySnake).length}, Bucket=${actualBucketId}, Functions=${actualFunctionIds.economyFunctionId}, ${actualFunctionIds.adminFunctionId}`
   );
 }
 

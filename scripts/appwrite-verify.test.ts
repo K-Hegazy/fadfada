@@ -22,7 +22,7 @@ import {
   CleanupHttpError,
   deleteOldChatMessages,
   runScheduledMaintenance,
-} from '../appwrite-functions/cleanup-old-messages/src/logic.js';
+} from './cleanup-old-messages-logic.ts';
 import type { UserProfile } from '../src/types/fadfada.js';
 import {
   isExpiredOrOfflineGuest,
@@ -349,15 +349,33 @@ test('Static migration audit: zero Firebase, Supabase, Vercel, or forbidden brow
 
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite.json')), 'appwrite.json must exist');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'scripts', 'setup-appwrite.ts')), 'scripts/setup-appwrite.ts must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'scripts', 'cleanup-old-messages.ts')), 'scripts/cleanup-old-messages.ts must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'scripts', 'cleanup-old-messages-logic.ts')), 'scripts/cleanup-old-messages-logic.ts must exist');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'fadfada-economy', 'src', 'main.js')));
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'fadfada-admin', 'src', 'main.js')));
-  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'cleanup-old-messages', 'src', 'main.js')));
+  assert.equal(
+    fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'cleanup-old-messages')),
+    false,
+    'Third Appwrite function directory must not exist on free-plan 2-function limit'
+  );
   const appwriteCfg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'appwrite.json'), 'utf8')) as {
     functions: Array<{ $id: string; schedule?: string }>;
   };
-  const cleanupFn = appwriteCfg.functions.find((f) => f.$id === 'cleanup-old-messages');
-  assert.ok(cleanupFn, 'cleanup-old-messages must be registered in appwrite.json');
-  assert.equal(cleanupFn.schedule, '*/15 * * * *');
+  assert.equal(appwriteCfg.functions.length, 2, 'appwrite.json must contain only the 2 free-plan functions');
+  assert.ok(appwriteCfg.functions.some((f) => f.$id === 'fadfada-economy'));
+  assert.ok(appwriteCfg.functions.some((f) => f.$id === 'fadfada-admin'));
+  assert.equal(
+    appwriteCfg.functions.some((f) => f.$id === 'cleanup-old-messages'),
+    false,
+    'cleanup-old-messages must not be registered as a 3rd Appwrite Function'
+  );
+
+  const cleanupWorkflowPath = path.join(ROOT_DIR, '.github', 'workflows', 'cleanup-messages.yml');
+  assert.ok(fs.existsSync(cleanupWorkflowPath), '.github/workflows/cleanup-messages.yml must exist');
+  const cleanupWorkflow = fs.readFileSync(cleanupWorkflowPath, 'utf8');
+  assert.ok(cleanupWorkflow.includes("cron: '*/15 * * * *'"));
+  assert.ok(cleanupWorkflow.includes('secrets.APPWRITE_API_KEY'));
+  assert.ok(cleanupWorkflow.includes('scripts/cleanup-old-messages.ts'));
 
   // Ensure owner password is never hardcoded in source files or scripts
   const forbiddenSecret = ['Fadfada', '@2026!', 'Owner'].join('');

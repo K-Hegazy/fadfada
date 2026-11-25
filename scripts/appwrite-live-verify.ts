@@ -216,22 +216,45 @@ async function runLiveVerify(): Promise<void> {
       const bucket = await serverStorage.getBucket({ bucketId: resources.bucketId });
       assert.equal(bucket.$id, resources.bucketId);
 
+      const usersIdx = await serverTables.listIndexes({
+        databaseId: resources.databaseId,
+        tableId: resources.tables.users,
+        queries: [ServerQuery.limit(100)],
+      });
+      const messagesIdx = await serverTables.listIndexes({
+        databaseId: resources.databaseId,
+        tableId: resources.tables.messages,
+        queries: [ServerQuery.limit(100)],
+      });
+      const roomMessagesIdx = await serverTables.listIndexes({
+        databaseId: resources.databaseId,
+        tableId: resources.tables.roomMessages,
+        queries: [ServerQuery.limit(100)],
+      });
+      const userIdxKeys = new Set(usersIdx.indexes.map((i) => i.key));
+      const msgIdxKeys = new Set(messagesIdx.indexes.map((i) => i.key));
+      const roomMsgIdxKeys = new Set(roomMessagesIdx.indexes.map((i) => i.key));
+      assert.ok(userIdxKeys.has('idx_role') && userIdxKeys.has('idx_last_seen'), 'Missing users indexes (idx_role, idx_last_seen)');
+      assert.ok(msgIdxKeys.has('idx_msg_created'), 'Missing messages index (idx_msg_created)');
+      assert.ok(roomMsgIdxKeys.has('idx_room_msg_created'), 'Missing room_messages index (idx_room_msg_created)');
+
       const econFn = await serverFunctions.get({ functionId: resources.economyFunctionId });
       const adminFn = await serverFunctions.get({ functionId: resources.adminFunctionId });
       assert.ok(econFn.deploymentId, 'fadfada-economy has no active deployment');
       assert.ok(adminFn.deploymentId, 'fadfada-admin has no active deployment');
       console.log(
-        `  -> DB=${db.$id}, Tables=${tablesList.tables.length}/31, Bucket=${bucket.$id}, EconScopes=[${(econFn.scopes || []).join(',')}], AdminScopes=[${(adminFn.scopes || []).join(',')}]`
+        `  -> DB=${db.$id}, Tables=${tablesList.tables.length}/31, Bucket=${bucket.$id}, Indexes=verified, EconScopes=[${(econFn.scopes || []).join(',')}], AdminScopes=[${(adminFn.scopes || []).join(',')}]`
       );
     });
 
-    // 2. Check Function & API Key Required Scopes
-    await check('Function Scopes (users.read, users.write, rows.read, rows.write)', async () => {
+    // 2. Check Function & API Key Required Scopes (2-function free-plan setup)
+    await check('Function Scopes (users.read, users.write, rows.read, rows.write, files)', async () => {
       const econFn = await serverFunctions.get({ functionId: resources.economyFunctionId });
       const adminFn = await serverFunctions.get({ functionId: resources.adminFunctionId });
       const required = ['users.read', 'users.write', 'rows.read', 'rows.write', 'databases.read', 'tables.read'];
+      const requiredAdminFiles = ['files.read', 'files.write'];
       const missingEcon = required.filter((s) => !(econFn.scopes || []).includes(s));
-      const missingAdmin = required.filter((s) => !(adminFn.scopes || []).includes(s));
+      const missingAdmin = [...required, ...requiredAdminFiles].filter((s) => !(adminFn.scopes || []).includes(s));
       assert.ok(
         missingEcon.length === 0 && missingAdmin.length === 0,
         `Missing Function scopes -> fadfada-economy:[${missingEcon.join(', ')}], fadfada-admin:[${missingAdmin.join(', ')}]`
