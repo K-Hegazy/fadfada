@@ -7,7 +7,7 @@ import {
   OAuthProvider,
   type Models,
 } from '../appwrite/config';
-import { subscribeToAccountEvents } from '../appwrite/realtime';
+import { disconnectRealtime, subscribeToAccountEvents } from '../appwrite/realtime';
 import { getAppBaseUrl } from '../utils/formatters';
 
 export interface AuthUser {
@@ -36,9 +36,28 @@ function mapAppwriteUser(user: Models.User<Models.Preferences>): AuthUser {
 let cachedUser: AuthUser | null = null;
 let initialCheckPromise: Promise<AuthUser | null> | null = null;
 const authListeners = new Set<(user: AuthUser | null) => void>();
+let accountRealtimeUnsub: (() => void) | null = null;
+
+function syncAccountRealtimeSubscription(user: AuthUser | null): void {
+  if (user && authListeners.size > 0) {
+    if (!accountRealtimeUnsub) {
+      accountRealtimeUnsub = subscribeToAccountEvents(() => {
+        void refreshAuthSession();
+      });
+    }
+    return;
+  }
+
+  if (accountRealtimeUnsub) {
+    const unsub = accountRealtimeUnsub;
+    accountRealtimeUnsub = null;
+    unsub();
+  }
+}
 
 function notifyListeners(user: AuthUser | null): void {
   cachedUser = user;
+  syncAccountRealtimeSubscription(user);
   for (const listener of authListeners) {
     try {
       listener(user);
@@ -244,6 +263,7 @@ export async function signOutUser(beforeSignOut?: () => Promise<void>): Promise<
     } catch {
       // Ignore already expired sessions
     }
+    await disconnectRealtime();
   }
   notifyListeners(null);
 }
@@ -259,12 +279,12 @@ export function subscribeToAuthChanges(callback: (user: AuthUser | null) => void
     callback(cachedUser);
   }
 
-  const unsubRealtime = subscribeToAccountEvents(() => {
-    void refreshAuthSession();
-  });
+  syncAccountRealtimeSubscription(cachedUser);
 
   return () => {
     authListeners.delete(callback);
-    unsubRealtime();
+    if (authListeners.size === 0) {
+      syncAccountRealtimeSubscription(null);
+    }
   };
 }

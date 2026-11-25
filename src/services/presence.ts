@@ -1,4 +1,5 @@
 import { isAppwriteConfigured, realtime } from '../appwrite/config';
+import { clearPendingRealtimePresence } from '../appwrite/realtime';
 import { PRESENCE_TTL_MS, type PresenceConnectionState, type UserProfile } from '../types/fadfada';
 import { timestampToMillis } from '../utils/formatters';
 import { syncAppwritePresence } from './profiles';
@@ -32,6 +33,7 @@ export function startRealtimePresence(
 
   const upsertAppwriteRealtimePresence = async (online: boolean) => {
     if (!isAppwriteConfigured) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       await realtime.upsertPresence({
         status: online ? 'online' : 'offline',
@@ -83,7 +85,7 @@ export function startRealtimePresence(
 
   const handlePageExit = () => {
     if (disposed) return;
-    void upsertAppwriteRealtimePresence(false);
+    clearPendingRealtimePresence();
     void syncAppwritePresence(uid, false);
   };
 
@@ -96,6 +98,7 @@ export function startRealtimePresence(
       upsertAppwriteRealtimePresence(false),
       syncAppwritePresence(uid, false),
     ]);
+    clearPendingRealtimePresence();
     if (!disposed) {
       onStateChange('offline');
     }
@@ -103,6 +106,7 @@ export function startRealtimePresence(
 
   const dispose = () => {
     disposed = true;
+    clearPendingRealtimePresence();
     window.clearInterval(heartbeatTimer);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     window.removeEventListener('beforeunload', handlePageExit);

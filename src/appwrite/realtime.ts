@@ -8,6 +8,58 @@ import {
 import { parseAppwriteError } from './errors';
 import { listTableRows, type AppwriteRow } from './tables';
 
+type InternalRealtimeShape = {
+  reconnect?: boolean;
+  activeSubscriptions?: Map<string, unknown>;
+  pendingPresence?: unknown;
+  createSocket?: () => Promise<void>;
+  closeSocket?: () => Promise<void>;
+};
+
+let resilienceInitialized = false;
+
+function ensureRealtimeResilience(): void {
+  if (resilienceInitialized || !isAppwriteConfigured || typeof window === 'undefined') {
+    return;
+  }
+  resilienceInitialized = true;
+
+  const rt = realtime as unknown as InternalRealtimeShape;
+
+  realtime.onError(() => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      rt.reconnect = false;
+    }
+  });
+
+  window.addEventListener('offline', () => {
+    rt.reconnect = false;
+    void rt.closeSocket?.().catch(() => {});
+  });
+
+  window.addEventListener('online', () => {
+    const hasWork = Boolean(rt.activeSubscriptions?.size || rt.pendingPresence);
+    if (!hasWork) return;
+    rt.reconnect = true;
+    void rt.createSocket?.().catch(() => {});
+  });
+}
+
+export async function disconnectRealtime(): Promise<void> {
+  if (!isAppwriteConfigured) return;
+  try {
+    await realtime.disconnect();
+  } catch {
+    // Ignore already closed socket errors
+  }
+}
+
+export function clearPendingRealtimePresence(): void {
+  if (!isAppwriteConfigured) return;
+  const rt = realtime as unknown as InternalRealtimeShape;
+  rt.pendingPresence = undefined;
+}
+
 export interface TableSubscriptionOptions<T> {
   tableId: string;
   queries?: string[];
@@ -40,6 +92,7 @@ export function subscribeToTableRows<T>({
     return () => {};
   }
 
+  ensureRealtimeResilience();
   let disposed = false;
   const rowsByKey = new Map<string, T>();
   let subscriptionHandle: { unsubscribe: () => Promise<void> } | null = null;
@@ -135,6 +188,7 @@ export function subscribeToSingleRow<T>(options: {
     return () => {};
   }
 
+  ensureRealtimeResilience();
   let disposed = false;
   let subscriptionHandle: { unsubscribe: () => Promise<void> } | null = null;
 
@@ -182,6 +236,7 @@ export function subscribeToSingleRow<T>(options: {
 
 export function subscribeToAccountEvents(onEvent: () => void): () => void {
   if (!isAppwriteConfigured) return () => {};
+  ensureRealtimeResilience();
   let disposed = false;
   let subHandle: { unsubscribe: () => Promise<void> } | null = null;
 
