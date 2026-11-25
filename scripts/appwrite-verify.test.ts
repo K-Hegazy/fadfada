@@ -929,6 +929,14 @@ test('sanitizeHttpUrl blocks unsafe schemes and production hosting assets exist'
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'public', '_redirects')), 'public/_redirects must exist');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'public', '_headers')), 'public/_headers must exist');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'public', 'favicon.svg')), 'public/favicon.svg must exist');
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'public', '404.html')), 'public/404.html must exist');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'vercel.json')), 'vercel.json must exist');
+
+  const ghWorkflowPath = path.join(ROOT_DIR, '.github', 'workflows', 'deploy.yml');
+  assert.ok(fs.existsSync(ghWorkflowPath), '.github/workflows/deploy.yml must exist');
+  const ghWorkflow = fs.readFileSync(ghWorkflowPath, 'utf8');
+  assert.ok(ghWorkflow.includes('https://fra.cloud.appwrite.io/v1'));
+  assert.ok(ghWorkflow.includes('6b022cc5002da26b7487'));
+  assert.ok(!ghWorkflow.includes('APPWRITE_API_KEY'), 'Workflow must never expose APPWRITE_API_KEY');
 });
 

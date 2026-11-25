@@ -8,6 +8,7 @@ import {
   type Models,
 } from '../appwrite/config';
 import { subscribeToAccountEvents } from '../appwrite/realtime';
+import { getAppBaseUrl } from '../utils/formatters';
 
 export interface AuthUser {
   uid: string;
@@ -109,11 +110,11 @@ export function translateAuthError(error: unknown): string {
 
 export async function signInWithGoogle(): Promise<void> {
   assertAppwriteConfigured();
-  const origin = window.location.origin;
+  const baseUrl = getAppBaseUrl();
   account.createOAuth2Session({
     provider: OAuthProvider.Google,
-    success: `${origin}/`,
-    failure: `${origin}/?auth_error=google`,
+    success: baseUrl,
+    failure: `${baseUrl}?auth_error=google`,
   });
 }
 
@@ -148,7 +149,7 @@ export async function signUpWithEmail(
   });
   try {
     await account.createVerification({
-      url: `${window.location.origin}/?verify=1`,
+      url: `${getAppBaseUrl()}?verify=1`,
     });
   } catch {
     // Non-blocking if SMTP/verification URL is still being configured
@@ -181,7 +182,7 @@ export async function upgradeGuestToMember(
   }
   try {
     await account.createVerification({
-      url: `${window.location.origin}/?verify=1`,
+      url: `${getAppBaseUrl()}?verify=1`,
     });
   } catch {
     // Non-blocking
@@ -195,7 +196,7 @@ export async function resetPassword(email: string): Promise<void> {
   assertAppwriteConfigured();
   await account.createRecovery({
     email: email.trim(),
-    url: `${window.location.origin}/?recovery=1`,
+    url: `${getAppBaseUrl()}?recovery=1`,
   });
 }
 
@@ -215,7 +216,7 @@ export async function completePasswordReset(
 export async function resendVerificationEmail(): Promise<void> {
   assertAppwriteConfigured();
   await account.createVerification({
-    url: `${window.location.origin}/?verify=1`,
+    url: `${getAppBaseUrl()}?verify=1`,
   });
 }
 

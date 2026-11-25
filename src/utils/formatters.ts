@@ -79,3 +79,10 @@ export function sanitizeHttpUrl(
     return '';
   }
 }
+
+export function getAppBaseUrl(): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const rawBase = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || '/';
+  const normalizedBase = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
+  return `${origin}${normalizedBase}`;
+}

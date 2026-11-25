@@ -19,6 +19,7 @@ import {
 } from '../services/economy';
 import { useApp } from '../state/AppContext';
 import type { DailyTask } from '../types/fadfada';
+import { getAppBaseUrl } from '../utils/formatters';
 import { DEFAULT_DAILY_TASKS, getLevelProgress } from '../utils/progression';
 import { FeedbackBanner, PageHeader } from './ui/Primitives';
 
@@ -152,7 +153,7 @@ export const TasksView: React.FC = () => {
 
   const handleTriggerShare = async () => {
     setError(null);
-    const shareUrl = window.location.origin;
+    const shareUrl = getAppBaseUrl();
     try {
       await navigator.clipboard?.writeText(`انضم إليّ في مجتمع فضفضة: ${shareUrl} (كود الدعوة: ${myReferralCode})`);
       await recordDailyTaskActivity('share');
