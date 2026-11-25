@@ -216,6 +216,120 @@ async function listRowsSafe(tablesDB, params) {
   }
 }
 
+const GUEST_ABANDONED_TTL_MS = 15 * 60 * 1000;
+
+async function purgeGuestRecordsAndAuth({
+  uid,
+  tablesDB,
+  usersApi,
+  databaseId,
+  tables,
+  Query,
+}) {
+  if (!uid) return;
+
+  if (tables.rooms) {
+    const roomsRes = await listRowsSafe(tablesDB, {
+      databaseId,
+      tableId: tables.rooms,
+      queries: [Query.contains('memberIds', uid), Query.limit(100)],
+    });
+    for (const room of roomsRes.rows || []) {
+      const members = Array.isArray(room.memberIds) ? room.memberIds.map(String) : [];
+      if (members.includes(uid)) {
+        const nextMembers = members.filter((id) => id !== uid);
+        await tablesDB
+          .updateRow({
+            databaseId,
+            tableId: tables.rooms,
+            rowId: room.$id,
+            data: { memberIds: nextMembers, activeCount: nextMembers.length },
+          })
+          .catch(() => {});
+      }
+    }
+  }
+
+  if (tables.matchQueue) {
+    await tablesDB.deleteRow({ databaseId, tableId: tables.matchQueue, rowId: uid }).catch(() => {});
+  }
+
+  const cleanupQueries = [
+    tables.dailyClaims ? { tableId: tables.dailyClaims, field: 'uid' } : null,
+    tables.notifications ? { tableId: tables.notifications, field: 'recipientId' } : null,
+    tables.notifications ? { tableId: tables.notifications, field: 'senderId' } : null,
+    tables.profileVisits ? { tableId: tables.profileVisits, field: 'visitorUid' } : null,
+    tables.profileVisits ? { tableId: tables.profileVisits, field: 'profileUid' } : null,
+  ].filter(Boolean);
+
+  for (const target of cleanupQueries) {
+    const res = await listRowsSafe(tablesDB, {
+      databaseId,
+      tableId: target.tableId,
+      queries: [Query.equal(target.field, uid), Query.limit(100)],
+    });
+    for (const row of res.rows || []) {
+      await tablesDB.deleteRow({ databaseId, tableId: target.tableId, rowId: row.$id }).catch(() => {});
+    }
+  }
+
+  if (tables.userPrivate) {
+    await tablesDB.deleteRow({ databaseId, tableId: tables.userPrivate, rowId: uid }).catch(() => {});
+  }
+  if (tables.users) {
+    await tablesDB.deleteRow({ databaseId, tableId: tables.users, rowId: uid }).catch(() => {});
+  }
+
+  if (usersApi && typeof usersApi.delete === 'function') {
+    const targetAuth =
+      typeof usersApi.get === 'function' ? await usersApi.get({ userId: uid }).catch(() => null) : null;
+    const hasEmailOrPhone = Boolean(targetAuth?.email) || Boolean(targetAuth?.phone);
+    const hasStaff = Array.isArray(targetAuth?.labels) && targetAuth.labels.includes('staff');
+    if (targetAuth && !hasEmailOrPhone && !hasStaff) {
+      await usersApi.delete({ userId: uid }).catch(() => {});
+    }
+  }
+}
+
+async function sweepAbandonedGuestsQuick({
+  tablesDB,
+  usersApi,
+  databaseId,
+  tables,
+  Query,
+  excludeUid = '',
+  nowMs = Date.now(),
+}) {
+  try {
+    const cutoffIso = new Date(nowMs - GUEST_ABANDONED_TTL_MS).toISOString();
+    const res = await listRowsSafe(tablesDB, {
+      databaseId,
+      tableId: tables.users,
+      queries: [Query.equal('role', 'guest'), Query.limit(20)],
+    });
+    for (const row of res.rows || []) {
+      const uid = String(row.uid || row.$id);
+      if (!uid || uid === excludeUid) continue;
+      if (row.role !== 'guest' || row.isAnonymous !== true) continue;
+      const lastSeenRaw = String(row.lastSeen || row.$updatedAt || row.createdAt || '');
+      const lastSeenMs = Date.parse(lastSeenRaw);
+      if (!Number.isFinite(lastSeenMs) || lastSeenRaw >= cutoffIso || nowMs - lastSeenMs < GUEST_ABANDONED_TTL_MS) {
+        continue;
+      }
+      await purgeGuestRecordsAndAuth({
+        uid,
+        tablesDB,
+        usersApi,
+        databaseId,
+        tables,
+        Query,
+      });
+    }
+  } catch {
+    // Non-blocking opportunistic sweep
+  }
+}
+
 async function checkDailyTaskCompletion(ctx, caller, rawKey, payload, dateKey) {
   const { callerUid, tablesDB, databaseId, tables, Query } = ctx;
   const dayStartIso = `${dateKey}T00:00:00.000Z`;
@@ -582,6 +696,15 @@ export async function handleEconomyAction(ctx) {
       })
       .catch(() => {});
 
+    await sweepAbandonedGuestsQuick({
+      tablesDB,
+      usersApi,
+      databaseId,
+      tables,
+      Query,
+      excludeUid: callerUid,
+    });
+
     return profileRow;
   }
 
@@ -592,8 +715,32 @@ export async function handleEconomyAction(ctx) {
   }
 
   // -------------------------------------------------------------------------
-  // 2. Presence & Safe Self Profile Updates
+  // 2. Presence, Guest Logout Purge & Safe Self Profile Updates
   // -------------------------------------------------------------------------
+  if (action === 'deleteGuestAccount') {
+    const authUser =
+      typeof usersApi.get === 'function' ? await usersApi.get({ userId: callerUid }).catch(() => null) : null;
+    const isAuthAnonymous = authUser
+      ? !authUser.email && !(authUser.phone && authUser.phone.length > 0)
+      : true;
+    const isStaffAuth = Array.isArray(authUser?.labels) && authUser.labels.includes('staff');
+
+    if (caller.role !== 'guest' || caller.isAnonymous !== true || !isAuthAnonymous || isStaffAuth) {
+      throw new HttpError(403, 'حذف الجلسة الفوري متاح لحسابات الضيوف المؤقتة فقط.');
+    }
+
+    await purgeGuestRecordsAndAuth({
+      uid: callerUid,
+      tablesDB,
+      usersApi,
+      databaseId,
+      tables,
+      Query,
+    });
+
+    return { ok: true, deleted: true, deletedUid: callerUid };
+  }
+
   if (action === 'syncPresence') {
     return await tablesDB.updateRow({
       databaseId,

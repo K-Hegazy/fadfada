@@ -29,11 +29,13 @@ import {
   subscribeToConversations,
 } from '../services/messaging';
 import {
+  isExpiredOrOfflineGuest,
   isUserPresenceOnline,
   startRealtimePresence,
   type PresenceSessionHandle,
 } from '../services/presence';
 import {
+  deleteGuestAccount,
   ensureUserProfile,
   recordProfileVisit,
   subscribeToPublicUsers,
@@ -116,7 +118,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [rawUsers, setRawUsers] = useState<UserProfile[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [storeItems, setStoreItems] = useState<StoreItem[]>(DEFAULT_STORE_ITEMS);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>({
@@ -186,7 +188,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAuthReady(true);
       if (!user) {
         setProfile(null);
-        setUsers([]);
+        setRawUsers([]);
         setConversations([]);
         setNotifications([]);
         setRelationships([]);
@@ -207,7 +209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!authUser) return;
     const timer = window.setInterval(() => {
       setPresenceClockMs(Date.now());
-    }, 30_000);
+    }, 15_000);
     return () => window.clearInterval(timer);
   }, [authUser]);
 
@@ -326,7 +328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsub = subscribeToPublicUsers(
       (publicUsers) => {
         if (!cancelled) {
-          setUsers(publicUsers);
+          setRawUsers(publicUsers);
           setPresenceClockMs(Date.now());
         }
       },
@@ -340,6 +342,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsub();
     };
   }, [authReady, authUser?.uid, isStaff]);
+
+  const users = useMemo(
+    () =>
+      rawUsers.filter(
+        (u) => u.uid === authUser?.uid || !isExpiredOrOfflineGuest(u, presenceClockMs)
+      ),
+    [rawUsers, authUser?.uid, presenceClockMs]
+  );
 
   const usersById = useMemo(() => {
     const map: Record<string, UserProfile> = {};
@@ -456,8 +466,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logout = useCallback(async () => {
     const handle = presenceHandleRef.current;
-    await signOutUser(handle ? () => handle.setOfflineNow() : undefined);
-  }, []);
+    const isGuestSession = Boolean(
+      profile ? profile.role === 'guest' || profile.isAnonymous : authUser?.isAnonymous
+    );
+    await signOutUser(async () => {
+      if (isGuestSession) {
+        try {
+          await deleteGuestAccount();
+          return;
+        } catch {
+          // Fallback to marking offline if cleanup function fails temporarily
+        }
+      }
+      if (handle) {
+        await handle.setOfflineNow();
+      }
+    });
+  }, [profile, authUser]);
 
   const value: AppContextValue = {
     authUser,

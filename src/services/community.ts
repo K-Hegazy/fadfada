@@ -95,13 +95,24 @@ export async function updateRoomMeta(
   });
 }
 
+export async function deleteRoomAsOwner(roomId: string): Promise<{
+  ok: boolean;
+  deletedRoomId: string;
+  deletedMessagesCount: number;
+  deletedFilesCount: number;
+}> {
+  return await executeAppwriteFunction(APPWRITE_CONFIG.adminFunctionId, 'deleteRoomAsOwner', {
+    roomId,
+  });
+}
+
 export function subscribeToRoomMessages(
   roomId: string,
   onUpdate: (messages: SimpleMessage[]) => void
 ): () => void {
   return subscribeToTableRows<SimpleMessage>({
     tableId: APPWRITE_CONFIG.tables.roomMessages,
-    queries: [Query.equal('roomId', roomId), Query.limit(120)],
+    queries: [Query.equal('roomId', roomId), Query.orderDesc('$createdAt'), Query.limit(120)],
     mapRow: (row) => ({
       id: String(row.$id),
       roomId: String(row.roomId || ''),
@@ -199,7 +210,7 @@ export async function consumeRoomViewOnce(
 export function subscribeToStories(onUpdate: (stories: Story[]) => void): () => void {
   return subscribeToTableRows<Story>({
     tableId: APPWRITE_CONFIG.tables.stories,
-    queries: [Query.limit(100)],
+    queries: [Query.orderDesc('$createdAt'), Query.limit(100)],
     mapRow: (row) => ({
       id: String(row.$id),
       authorId: String(row.authorId || ''),
@@ -298,7 +309,7 @@ function mapWallPostRow(row: AppwriteRow): WallPost {
 export function subscribeToWallPosts(onUpdate: (posts: WallPost[]) => void): () => void {
   return subscribeToTableRows<WallPost>({
     tableId: APPWRITE_CONFIG.tables.wallPosts,
-    queries: [Query.limit(60)],
+    queries: [Query.orderDesc('$createdAt'), Query.limit(60)],
     mapRow: mapWallPostRow,
     sort: (a, b) => timestampToMillis(b.createdAt) - timestampToMillis(a.createdAt),
     onData: onUpdate,
@@ -447,7 +458,7 @@ export function subscribeToCreatorProposals(
 ): () => void {
   return subscribeToTableRows<CreatorProposal>({
     tableId: APPWRITE_CONFIG.tables.creatorProposals,
-    queries: [Query.limit(60)],
+    queries: [Query.orderDesc('$createdAt'), Query.limit(60)],
     mapRow: (row) => ({
       id: String(row.$id),
       authorId: String(row.authorId || ''),
@@ -576,7 +587,7 @@ const ANONYMOUS_ALIASES = [
 export function subscribeToSecrets(onUpdate: (secrets: Secret[]) => void): () => void {
   return subscribeToTableRows<Secret>({
     tableId: APPWRITE_CONFIG.tables.secrets,
-    queries: [Query.limit(60)],
+    queries: [Query.orderDesc('$createdAt'), Query.limit(60)],
     mapRow: (row) => ({
       id: String(row.$id),
       authorHash: String(row.authorHash || ''),

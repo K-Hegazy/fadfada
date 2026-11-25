@@ -267,6 +267,10 @@ export async function syncAppwritePresence(_uid: string, isOnline: boolean): Pro
   }
 }
 
+export async function deleteGuestAccount(): Promise<void> {
+  await executeAppwriteFunction(APPWRITE_CONFIG.economyFunctionId, 'deleteGuestAccount');
+}
+
 export async function likeUserProfile(targetUid: string): Promise<void> {
   await executeAppwriteFunction(APPWRITE_CONFIG.economyFunctionId, 'likeProfile', {
     targetUid,
@@ -333,8 +337,8 @@ export function subscribeToPublicUsers(
   return subscribeToTableRows<UserProfile>({
     tableId: APPWRITE_CONFIG.tables.users,
     queries: includeAllForAdmin
-      ? [Query.limit(200)]
-      : [Query.equal('isPublic', true), Query.limit(150)],
+      ? [Query.orderDesc('$updatedAt'), Query.limit(250)]
+      : [Query.equal('isPublic', true), Query.orderDesc('$updatedAt'), Query.limit(200)],
     mapRow: mapUserRow,
     getKey: (u) => u.uid,
     matchesRow: (u) => (includeAllForAdmin ? true : u.isPublic),

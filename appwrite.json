@@ -58,6 +58,7 @@
         "users.write",
         "databases.read",
         "databases.write",
+        "tables.read",
         "rows.read",
         "rows.write"
       ],
@@ -83,10 +84,39 @@
         "users.write",
         "databases.read",
         "databases.write",
+        "tables.read",
         "rows.read",
-        "rows.write"
+        "rows.write",
+        "files.read",
+        "files.write"
       ],
       "path": "appwrite-functions/fadfada-admin"
+    },
+    {
+      "$id": "cleanup-old-messages",
+      "name": "cleanup-old-messages",
+      "runtime": "node-22",
+      "specification": "s-0.5vcpu-512mb",
+      "execute": [],
+      "events": [],
+      "schedule": "*/15 * * * *",
+      "timeout": 60,
+      "enabled": true,
+      "logging": true,
+      "entrypoint": "src/main.js",
+      "commands": "npm install",
+      "scopes": [
+        "users.read",
+        "users.write",
+        "databases.read",
+        "databases.write",
+        "tables.read",
+        "rows.read",
+        "rows.write",
+        "files.read",
+        "files.write"
+      ],
+      "path": "appwrite-functions/cleanup-old-messages"
     }
   ],
   "tablesDB": [

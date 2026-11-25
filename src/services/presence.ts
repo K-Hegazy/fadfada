@@ -4,9 +4,9 @@ import { PRESENCE_TTL_MS, type PresenceConnectionState, type UserProfile } from 
 import { timestampToMillis } from '../utils/formatters';
 import { syncAppwritePresence } from './profiles';
 
-const HEARTBEAT_INTERVAL_MS = 60_000;
-const MIN_WRITE_GAP_MS = 45_000;
-const VISIBILITY_REFRESH_GAP_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = 45_000;
+const MIN_WRITE_GAP_MS = 35_000;
+const VISIBILITY_REFRESH_GAP_MS = 25_000;
 
 export interface PresenceSessionHandle {
   setOfflineNow: () => Promise<void>;
@@ -17,9 +17,15 @@ export function isUserPresenceOnline(user: UserProfile, nowMs = Date.now()): boo
   if (!user.isOnline) return false;
   const lastSeenMs = timestampToMillis(user.lastSeen);
   if (!lastSeenMs) {
-    return true;
+    return false;
   }
   return nowMs - lastSeenMs <= PRESENCE_TTL_MS;
+}
+
+export function isExpiredOrOfflineGuest(user: UserProfile, nowMs = Date.now()): boolean {
+  const isGuestAccount = user.role === 'guest' || user.isAnonymous;
+  if (!isGuestAccount) return false;
+  return !isUserPresenceOnline(user, nowMs);
 }
 
 export function startRealtimePresence(

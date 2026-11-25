@@ -486,7 +486,7 @@ export interface MatchSession {
   createdAt: AppTimestamp;
 }
 
-export const PRESENCE_TTL_MS = 150_000;
+export const PRESENCE_TTL_MS = 120_000;
 export type PresenceConnectionState = 'connecting' | 'connected' | 'offline';
 
 export type ActiveNavSection =

@@ -213,6 +213,8 @@ const TABLES_SCHEMA: TableSpec[] = [
       { key: 'idx_username', type: TablesDBIndexType.Unique, columns: ['username'] },
       { key: 'idx_is_public', type: TablesDBIndexType.Key, columns: ['isPublic'] },
       { key: 'idx_is_online', type: TablesDBIndexType.Key, columns: ['isOnline'] },
+      { key: 'idx_role', type: TablesDBIndexType.Key, columns: ['role'] },
+      { key: 'idx_last_seen', type: TablesDBIndexType.Key, columns: ['lastSeen'] },
     ],
   },
   {
@@ -292,6 +294,7 @@ const TABLES_SCHEMA: TableSpec[] = [
       { key: 'idx_msg_conv', type: TablesDBIndexType.Key, columns: ['conversationId'] },
       { key: 'idx_msg_sender', type: TablesDBIndexType.Key, columns: ['senderId'] },
       { key: 'idx_msg_recipient', type: TablesDBIndexType.Key, columns: ['recipientId'] },
+      { key: 'idx_msg_created', type: TablesDBIndexType.Key, columns: ['createdAt'] },
     ],
   },
   {
@@ -337,7 +340,10 @@ const TABLES_SCHEMA: TableSpec[] = [
       { kind: 'varchar', key: 'viewOnceViewedBy', size: 64, array: true },
       { kind: 'varchar', key: 'createdAt', size: 48, xdefault: '' },
     ],
-    indexes: [{ key: 'idx_room_msg_room', type: TablesDBIndexType.Key, columns: ['roomId'] }],
+    indexes: [
+      { key: 'idx_room_msg_room', type: TablesDBIndexType.Key, columns: ['roomId'] },
+      { key: 'idx_room_msg_created', type: TablesDBIndexType.Key, columns: ['createdAt'] },
+    ],
   },
   {
     id: 'stories',
@@ -1031,12 +1037,27 @@ async function run(): Promise<void> {
       preferredId: 'fadfada-economy',
       name: 'fadfada-economy',
       dir: path.resolve(process.cwd(), 'appwrite-functions', 'fadfada-economy'),
+      execute: ['users'],
+      schedule: '',
+      timeout: 15,
     },
     {
       key: 'adminFunctionId' as const,
       preferredId: 'fadfada-admin',
       name: 'fadfada-admin',
       dir: path.resolve(process.cwd(), 'appwrite-functions', 'fadfada-admin'),
+      execute: ['users'],
+      schedule: '',
+      timeout: 15,
+    },
+    {
+      key: 'cleanupFunctionId' as const,
+      preferredId: 'cleanup-old-messages',
+      name: 'cleanup-old-messages',
+      dir: path.resolve(process.cwd(), 'appwrite-functions', 'cleanup-old-messages'),
+      execute: [] as string[],
+      schedule: '*/15 * * * *',
+      timeout: 60,
     },
   ];
 
@@ -1048,11 +1069,14 @@ async function run(): Promise<void> {
     ProjectKeyScopes.TablesRead,
     ProjectKeyScopes.RowsRead,
     ProjectKeyScopes.RowsWrite,
+    ProjectKeyScopes.FilesRead,
+    ProjectKeyScopes.FilesWrite,
   ];
 
-  const actualFunctionIds: Record<'economyFunctionId' | 'adminFunctionId', string> = {
+  const actualFunctionIds: Record<'economyFunctionId' | 'adminFunctionId' | 'cleanupFunctionId', string> = {
     economyFunctionId: '',
     adminFunctionId: '',
+    cleanupFunctionId: '',
   };
 
   for (const fn of functionSpecs) {
@@ -1075,8 +1099,9 @@ async function run(): Promise<void> {
           functionId: fn.preferredId,
           name: fn.name,
           runtime: Runtime.Node22,
-          execute: ['users'],
-          timeout: 15,
+          execute: fn.execute,
+          schedule: fn.schedule || undefined,
+          timeout: fn.timeout,
           enabled: true,
           logging: true,
           entrypoint: 'src/main.js',
@@ -1092,8 +1117,9 @@ async function run(): Promise<void> {
           functionId: fn.preferredId,
           name: fn.name,
           runtime: Runtime.Node22,
-          execute: ['users'],
-          timeout: 15,
+          execute: fn.execute,
+          schedule: fn.schedule || undefined,
+          timeout: fn.timeout,
           enabled: true,
           logging: true,
           entrypoint: 'src/main.js',
@@ -1102,6 +1128,24 @@ async function run(): Promise<void> {
         });
         fnId = createdMinimal.$id;
         currentScopes = [];
+      }
+    } else if (fn.schedule) {
+      try {
+        await functionsApi.update({
+          functionId: fnId,
+          name: fn.name,
+          runtime: Runtime.Node22,
+          execute: fn.execute,
+          schedule: fn.schedule,
+          timeout: fn.timeout,
+          enabled: true,
+          logging: true,
+          entrypoint: 'src/main.js',
+          commands: 'npm install',
+          scopes: currentScopes,
+        });
+      } catch {
+        // Non-blocking if schedule update not supported by key
       }
     }
 
@@ -1116,8 +1160,9 @@ async function run(): Promise<void> {
             functionId: fnId,
             name: fn.name,
             runtime: Runtime.Node22,
-            execute: ['users'],
-            timeout: 15,
+            execute: fn.execute,
+            schedule: fn.schedule || undefined,
+            timeout: fn.timeout,
             enabled: true,
             logging: true,
             entrypoint: 'src/main.js',
@@ -1146,6 +1191,7 @@ async function run(): Promise<void> {
       varList.variables.map((v) => [v.key, { id: v.$id, value: v.value }])
     );
     await upsertFunctionVar(fnId, 'APPWRITE_DATABASE_ID', actualDatabaseId, existingVars);
+    await upsertFunctionVar(fnId, 'APPWRITE_STORAGE_BUCKET_ID', actualBucketId, existingVars);
     for (const [snakeId, actualId] of Object.entries(tableIdsBySnake)) {
       await upsertFunctionVar(fnId, `APPWRITE_TABLE_${snakeId.toUpperCase()}`, actualId, existingVars);
     }
@@ -1247,11 +1293,12 @@ async function run(): Promise<void> {
     if (appwriteCfg.buckets?.[0]) appwriteCfg.buckets[0].$id = actualBucketId;
     if (appwriteCfg.functions?.[0]) appwriteCfg.functions[0].$id = actualFunctionIds.economyFunctionId;
     if (appwriteCfg.functions?.[1]) appwriteCfg.functions[1].$id = actualFunctionIds.adminFunctionId;
+    if (appwriteCfg.functions?.[2]) appwriteCfg.functions[2].$id = actualFunctionIds.cleanupFunctionId;
     fs.writeFileSync(appwriteJsonPath, `${JSON.stringify(appwriteCfg, null, 2)}\n`, 'utf8');
   }
 
   console.log(
-    `Appwrite setup completed: DB=${actualDatabaseId}, Tables=${Object.keys(tableIdsBySnake).length}, Bucket=${actualBucketId}, Functions=${actualFunctionIds.economyFunctionId}, ${actualFunctionIds.adminFunctionId}`
+    `Appwrite setup completed: DB=${actualDatabaseId}, Tables=${Object.keys(tableIdsBySnake).length}, Bucket=${actualBucketId}, Functions=${actualFunctionIds.economyFunctionId}, ${actualFunctionIds.adminFunctionId}, ${actualFunctionIds.cleanupFunctionId}`
   );
 }
 

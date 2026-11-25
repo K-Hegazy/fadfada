@@ -17,7 +17,17 @@ import {
   AdminHttpError,
   handleAdminAction,
 } from '../appwrite-functions/fadfada-admin/src/logic.js';
+import {
+  cleanupAbandonedGuests,
+  CleanupHttpError,
+  deleteOldChatMessages,
+  runScheduledMaintenance,
+} from '../appwrite-functions/cleanup-old-messages/src/logic.js';
 import type { UserProfile } from '../src/types/fadfada.js';
+import {
+  isExpiredOrOfflineGuest,
+  isUserPresenceOnline,
+} from '../src/services/presence.js';
 import {
   getGenderStyle,
   normalizeGender,
@@ -64,6 +74,7 @@ const TABLES = {
 function createInMemoryEnv() {
   const db = new Map<string, Map<string, Record<string, unknown>>>();
   const authUsers = new Map<string, { $id: string; email: string; name: string; phone?: string; emailVerification: boolean; labels: string[] }>();
+  const storageFiles = new Map<string, { $id: string; bucketId: string }>();
   let seq = 1;
 
   const ensureTable = (tableId: string) => {
@@ -85,23 +96,44 @@ function createInMemoryEnv() {
       }
       return structuredClone(row);
     },
-    async listRows({ tableId, queries = [] }: { databaseId: string; tableId: string; queries?: Array<{ type: string; field?: string; value?: unknown; limit?: number }> }) {
+    async listRows({
+      tableId,
+      queries = [],
+    }: {
+      databaseId: string;
+      tableId: string;
+      queries?: Array<{ type: string; field?: string; value?: unknown; limit?: number }>;
+    }) {
       let rows = Array.from(ensureTable(tableId).values()).map((r) => structuredClone(r));
       let limit = 100;
+      let cursorId: string | null = null;
       for (const q of queries) {
         if (q?.type === 'equal' && q.field) {
           rows = rows.filter((r) => r[q.field!] === q.value);
         } else if (q?.type === 'greaterThanEqual' && q.field) {
           rows = rows.filter((r) => String(r[q.field!] ?? '') >= String(q.value ?? ''));
+        } else if (q?.type === 'lessThan' && q.field) {
+          rows = rows.filter((r) => {
+            const val = String(r[q.field!] ?? '');
+            return Boolean(val) && val < String(q.value ?? '');
+          });
         } else if (q?.type === 'contains' && q.field) {
           rows = rows.filter((r) => {
             const val = r[q.field!];
             if (Array.isArray(val)) return val.includes(q.value);
             return String(val ?? '').includes(String(q.value ?? ''));
           });
+        } else if (q?.type === 'orderDesc' && q.field) {
+          rows.sort((a, b) => String(b[q.field!] ?? '').localeCompare(String(a[q.field!] ?? '')));
+        } else if (q?.type === 'cursorAfter' && typeof q.value === 'string') {
+          cursorId = q.value;
         } else if (q?.type === 'limit' && typeof q.limit === 'number') {
           limit = q.limit;
         }
+      }
+      if (cursorId) {
+        const idx = rows.findIndex((r) => r.$id === cursorId);
+        rows = idx >= 0 ? rows.slice(idx + 1) : [];
       }
       rows = rows.slice(0, limit);
       return { total: rows.length, rows };
@@ -166,6 +198,25 @@ function createInMemoryEnv() {
       if (u) u.labels = [...labels];
       return u;
     },
+    async delete({ userId }: { userId: string }) {
+      if (!authUsers.has(userId)) {
+        const err = new Error(`User not found: ${userId}`) as Error & { code: number };
+        err.code = 404;
+        throw err;
+      }
+      authUsers.delete(userId);
+    },
+  };
+
+  const storageApi = {
+    async deleteFile({ fileId }: { bucketId: string; fileId: string }) {
+      if (!storageFiles.has(fileId)) {
+        const err = new Error(`File not found: ${fileId}`) as Error & { code: number };
+        err.code = 404;
+        throw err;
+      }
+      storageFiles.delete(fileId);
+    },
   };
 
   const Permission = {
@@ -185,15 +236,21 @@ function createInMemoryEnv() {
   const Query = {
     equal: (field: string, value: unknown) => ({ type: 'equal', field, value }),
     greaterThanEqual: (field: string, value: unknown) => ({ type: 'greaterThanEqual', field, value }),
+    lessThan: (field: string, value: unknown) => ({ type: 'lessThan', field, value }),
     contains: (field: string, value: unknown) => ({ type: 'contains', field, value }),
+    orderDesc: (field: string) => ({ type: 'orderDesc', field }),
+    cursorAfter: (value: string) => ({ type: 'cursorAfter', value }),
     limit: (limit: number) => ({ type: 'limit', limit }),
   };
 
   return {
     db,
     authUsers,
+    storageFiles,
     tablesDB,
     usersApi,
+    storageApi,
+    Query,
     economyCtx: (callerUid: string, action: string, payload: Record<string, unknown> = {}) => ({
       callerUid,
       action,
@@ -213,11 +270,27 @@ function createInMemoryEnv() {
       payload,
       tablesDB,
       usersApi,
+      storageApi,
       databaseId: 'fadfada_db',
+      bucketId: 'fadfada_media',
       tables: TABLES,
       Permission,
       Role,
       ID,
+      Query,
+    }),
+    cleanupCtx: (payload: Record<string, unknown> = {}, opts: { callerUid?: string; isScheduledTrigger?: boolean; nowMs?: number } = {}) => ({
+      callerUid: opts.callerUid ?? '',
+      isScheduledTrigger: opts.isScheduledTrigger ?? true,
+      payload,
+      tablesDB,
+      usersApi,
+      storageApi,
+      databaseId: 'fadfada_db',
+      bucketId: 'fadfada_media',
+      tables: TABLES,
+      Query,
+      nowMs: opts.nowMs ?? Date.now(),
     }),
   };
 }
@@ -278,6 +351,13 @@ test('Static migration audit: zero Firebase, Supabase, Vercel, or forbidden brow
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'scripts', 'setup-appwrite.ts')), 'scripts/setup-appwrite.ts must exist');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'fadfada-economy', 'src', 'main.js')));
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'fadfada-admin', 'src', 'main.js')));
+  assert.ok(fs.existsSync(path.join(ROOT_DIR, 'appwrite-functions', 'cleanup-old-messages', 'src', 'main.js')));
+  const appwriteCfg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'appwrite.json'), 'utf8')) as {
+    functions: Array<{ $id: string; schedule?: string }>;
+  };
+  const cleanupFn = appwriteCfg.functions.find((f) => f.$id === 'cleanup-old-messages');
+  assert.ok(cleanupFn, 'cleanup-old-messages must be registered in appwrite.json');
+  assert.equal(cleanupFn.schedule, '*/15 * * * *');
 
   // Ensure owner password is never hardcoded in source files or scripts
   const forbiddenSecret = ['Fadfada', '@2026!', 'Owner'].join('');
@@ -939,4 +1019,376 @@ test('sanitizeHttpUrl blocks unsafe schemes and production hosting assets exist'
   assert.ok(ghWorkflow.includes('6b022cc5002da26b7487'));
   assert.ok(!ghWorkflow.includes('APPWRITE_API_KEY'), 'Workflow must never expose APPWRITE_API_KEY');
 });
+
+test('Guest logout deletes temporary DB records and Appwrite Auth user while blocking member self-purge', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('owner_g', { $id: 'owner_g', email: BOOTSTRAPPED_OWNER_EMAIL, name: 'Owner', emailVerification: true, labels: [] });
+  env.authUsers.set('member_g', { $id: 'member_g', email: 'm@example.com', name: 'Member', emailVerification: true, labels: [] });
+  env.authUsers.set('guest_temp', { $id: 'guest_temp', email: '', name: '', emailVerification: false, labels: [] });
+
+  await handleEconomyAction(env.economyCtx('owner_g', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('member_g', 'ensureProfile'));
+  await handleEconomyAction(
+    env.economyCtx('guest_temp', 'ensureProfile', {
+      guestProfile: { displayName: 'ضيف مؤقت', age: 24, gender: 'male', acceptedTerms: true },
+    })
+  );
+
+  // Guest joins a room and has match queue / notification / visit rows
+  await handleAdminAction(env.adminCtx('owner_g', 'ensureOfficialRooms'));
+  await handleEconomyAction(env.economyCtx('guest_temp', 'joinRoom', { roomId: 'official_cafe' }));
+  await handleEconomyAction(env.economyCtx('guest_temp', 'recordProfileVisit', { profileUid: 'member_g' }));
+  await handleEconomyAction(env.economyCtx('guest_temp', 'joinRandomMatch', { mode: 'text', preferredGender: 'all' }));
+
+  // Permanent member cannot call deleteGuestAccount (403)
+  await assert.rejects(
+    () => handleEconomyAction(env.economyCtx('member_g', 'deleteGuestAccount')),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+
+  // Guest logout purges everything cleanly
+  const delRes = await handleEconomyAction(env.economyCtx('guest_temp', 'deleteGuestAccount'));
+  assert.equal(delRes.deleted, true);
+  assert.equal(env.authUsers.has('guest_temp'), false);
+  assert.equal(env.db.get('users')?.has('guest_temp'), false);
+  assert.equal(env.db.get('user_private')?.has('guest_temp'), false);
+  assert.equal(env.db.get('match_queue')?.has('guest_temp'), false);
+
+  const cafe = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'rooms', rowId: 'official_cafe' });
+  assert.equal((cafe.memberIds as string[]).includes('guest_temp'), false);
+  assert.equal(cafe.activeCount, 0);
+  // Permanent member untouched
+  assert.equal(env.authUsers.has('member_g'), true);
+  assert.equal(env.db.get('users')?.has('member_g'), true);
+});
+
+test('Abandoned Guest TTL cleanup removes stale guests without touching active guests or permanent members', async () => {
+  const env = createInMemoryEnv();
+  const nowMs = Date.now();
+  const staleIso = new Date(nowMs - 30 * 60 * 1000).toISOString();
+  const freshIso = new Date(nowMs - 10 * 1000).toISOString();
+
+  env.authUsers.set('guest_stale', { $id: 'guest_stale', email: '', name: '', emailVerification: false, labels: [] });
+  env.authUsers.set('guest_active', { $id: 'guest_active', email: '', name: '', emailVerification: false, labels: [] });
+  env.authUsers.set('member_old', { $id: 'member_old', email: 'old@example.com', name: 'Old Member', emailVerification: true, labels: [] });
+
+  await handleEconomyAction(
+    env.economyCtx('guest_stale', 'ensureProfile', {
+      guestProfile: { displayName: 'ضيف مهجور', age: 25, gender: 'female', acceptedTerms: true },
+    })
+  );
+  await handleEconomyAction(
+    env.economyCtx('guest_active', 'ensureProfile', {
+      guestProfile: { displayName: 'ضيف نشط', age: 26, gender: 'male', acceptedTerms: true },
+    })
+  );
+  await handleEconomyAction(env.economyCtx('member_old', 'ensureProfile'));
+
+  await env.tablesDB.updateRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'guest_stale', data: { lastSeen: staleIso } });
+  await env.tablesDB.updateRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'guest_active', data: { lastSeen: freshIso } });
+  await env.tablesDB.updateRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'member_old', data: { lastSeen: staleIso } });
+
+  const cleanupRes = await cleanupAbandonedGuests({
+    tablesDB: env.tablesDB,
+    usersApi: env.usersApi,
+    databaseId: 'fadfada_db',
+    tables: TABLES,
+    Query: env.Query,
+    nowMs,
+    guestTtlMs: 15 * 60 * 1000,
+  });
+
+  assert.equal(cleanupRes.deletedGuests, 1);
+  assert.deepEqual(cleanupRes.deletedGuestIds, ['guest_stale']);
+  assert.equal(env.authUsers.has('guest_stale'), false);
+  assert.equal(env.db.get('users')?.has('guest_stale'), false);
+  assert.equal(env.authUsers.has('guest_active'), true);
+  assert.equal(env.db.get('users')?.has('guest_active'), true);
+  assert.equal(env.authUsers.has('member_old'), true);
+  assert.equal(env.db.get('users')?.has('member_old'), true);
+});
+
+test('Presence TTL helpers expire stale/offline guests cleanly while preserving members', () => {
+  const nowMs = Date.now();
+  const base = {
+    uid: 'x',
+    username: 'x',
+    displayName: 'X',
+    avatar: '',
+    cover: '',
+    bio: '',
+    gender: 'male',
+    age: 22,
+    country: '',
+    countryFlag: '',
+    maritalStatus: 'single',
+    partnerUid: '',
+    partnerName: '',
+    affiliation: '',
+    role: 'guest',
+    permissions: [],
+    isBanned: false,
+    banReason: '',
+    level: 1,
+    xp: 0,
+    coins: 0,
+    lastClaimKey: '',
+    giftsSentCount: 0,
+    giftsReceivedCount: 0,
+    likesCount: 0,
+    visitsCount: 0,
+    friendsCount: 0,
+    vipTier: 'none',
+    vipExpiresAt: null,
+    frameId: 'none',
+    nameColor: '',
+    isNamePinned: false,
+    unlockedFeatures: [],
+    badges: [],
+    ghostMode: false,
+    hideLastSeen: false,
+    privacy: { messagePermission: 'everyone', showOnline: true, soundNotifications: true, visualNotifications: true },
+    isOnline: true,
+    isAnonymous: true,
+    isPublic: true,
+    freeMatchesUsedToday: 0,
+    lastMatchDate: '',
+    dailyMessagesSent: 0,
+    lastMessageDate: '',
+    createdAt: null,
+    lastSeen: new Date(nowMs - 30_000).toISOString(),
+  } as UserProfile;
+
+  assert.equal(isUserPresenceOnline(base, nowMs), true);
+  assert.equal(isExpiredOrOfflineGuest(base, nowMs), false);
+
+  const missingLastSeen = { ...base, lastSeen: null };
+  assert.equal(isUserPresenceOnline(missingLastSeen, nowMs), false);
+  assert.equal(isExpiredOrOfflineGuest(missingLastSeen, nowMs), true);
+
+  const expiredGuest = { ...base, lastSeen: new Date(nowMs - 180_000).toISOString() };
+  assert.equal(isUserPresenceOnline(expiredGuest, nowMs), false);
+  assert.equal(isExpiredOrOfflineGuest(expiredGuest, nowMs), true);
+
+  const offlineMember = { ...expiredGuest, role: 'member' as const, isAnonymous: false };
+  assert.equal(isExpiredOrOfflineGuest(offlineMember, nowMs), false);
+});
+
+test('7-day chat message retention deletes old DM & room messages + unreferenced Storage files only', async () => {
+  const env = createInMemoryEnv();
+  const nowMs = Date.now();
+  const eightDaysAgo = new Date(nowMs - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const twoDaysAgo = new Date(nowMs - 2 * 24 * 60 * 60 * 1000).toISOString();
+
+  env.authUsers.set('u_a', { $id: 'u_a', email: 'ua@example.com', name: 'A', emailVerification: true, labels: [] });
+  env.authUsers.set('u_b', { $id: 'u_b', email: 'ub@example.com', name: 'B', emailVerification: true, labels: [] });
+  await handleEconomyAction(env.economyCtx('u_a', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('u_b', 'ensureProfile'));
+
+  env.storageFiles.set('orphan_old_file', { $id: 'orphan_old_file', bucketId: 'fadfada_media' });
+  env.storageFiles.set('shared_wall_file', { $id: 'shared_wall_file', bucketId: 'fadfada_media' });
+  env.storageFiles.set('fresh_chat_file', { $id: 'fresh_chat_file', bucketId: 'fadfada_media' });
+
+  await env.tablesDB.createRow({
+    databaseId: 'fadfada_db',
+    tableId: 'messages',
+    rowId: 'old_dm_1',
+    data: {
+      conversationId: 'c_1',
+      senderId: 'u_a',
+      recipientId: 'u_b',
+      text: 'رسالة قديمة',
+      mediaUrl: 'https://fra.cloud.appwrite.io/v1/storage/buckets/fadfada_media/files/orphan_old_file/view?project=p',
+      createdAt: eightDaysAgo,
+    },
+  });
+  await env.tablesDB.createRow({
+    databaseId: 'fadfada_db',
+    tableId: 'messages',
+    rowId: 'old_dm_shared',
+    data: {
+      conversationId: 'c_1',
+      senderId: 'u_a',
+      recipientId: 'u_b',
+      text: 'ملف مشترك مع الحائط',
+      mediaUrl: 'https://fra.cloud.appwrite.io/v1/storage/buckets/fadfada_media/files/shared_wall_file/view?project=p',
+      createdAt: eightDaysAgo,
+    },
+  });
+  await env.tablesDB.createRow({
+    databaseId: 'fadfada_db',
+    tableId: 'messages',
+    rowId: 'fresh_dm_1',
+    data: {
+      conversationId: 'c_1',
+      senderId: 'u_b',
+      recipientId: 'u_a',
+      text: 'رسالة حديثة',
+      mediaUrl: 'https://fra.cloud.appwrite.io/v1/storage/buckets/fadfada_media/files/fresh_chat_file/view?project=p',
+      createdAt: twoDaysAgo,
+    },
+  });
+  await env.tablesDB.createRow({
+    databaseId: 'fadfada_db',
+    tableId: 'room_messages',
+    rowId: 'old_room_msg',
+    data: {
+      roomId: 'official_cafe',
+      senderId: 'u_a',
+      text: 'رسالة غرفة قديمة',
+      mediaUrl: '',
+      createdAt: eightDaysAgo,
+    },
+  });
+  await env.tablesDB.createRow({
+    databaseId: 'fadfada_db',
+    tableId: 'room_messages',
+    rowId: 'fresh_room_msg',
+    data: {
+      roomId: 'official_cafe',
+      senderId: 'u_a',
+      text: 'رسالة غرفة حديثة',
+      mediaUrl: '',
+      createdAt: twoDaysAgo,
+    },
+  });
+  await env.tablesDB.createRow({
+    databaseId: 'fadfada_db',
+    tableId: 'wall_posts',
+    rowId: 'wall_1',
+    data: {
+      authorId: 'u_a',
+      text: 'منشور يستخدم نفس الصورة',
+      imageUrl: 'https://fra.cloud.appwrite.io/v1/storage/buckets/fadfada_media/files/shared_wall_file/view?project=p',
+      createdAt: eightDaysAgo,
+    },
+  });
+
+  // Non-owner cannot trigger maintenance manually
+  await assert.rejects(
+    () => runScheduledMaintenance(env.cleanupCtx({}, { callerUid: 'u_a', isScheduledTrigger: false, nowMs })),
+    (err: unknown) => err instanceof CleanupHttpError && err.status === 403
+  );
+
+  const res = await deleteOldChatMessages({
+    tablesDB: env.tablesDB,
+    storageApi: env.storageApi,
+    databaseId: 'fadfada_db',
+    bucketId: 'fadfada_media',
+    tables: TABLES,
+    Query: env.Query,
+    nowMs,
+    retentionDays: 7,
+  });
+
+  assert.equal(res.deletedMessages, 2);
+  assert.equal(res.deletedRoomMessages, 1);
+  assert.equal(res.deletedFiles, 1);
+  assert.equal(res.skippedReferencedFiles, 1);
+  assert.equal(env.db.get('messages')?.has('fresh_dm_1'), true);
+  assert.equal(env.db.get('room_messages')?.has('fresh_room_msg'), true);
+  assert.equal(env.storageFiles.has('orphan_old_file'), false);
+  assert.equal(env.storageFiles.has('shared_wall_file'), true);
+  assert.equal(env.storageFiles.has('fresh_chat_file'), true);
+  assert.equal(env.db.get('users')?.has('u_a'), true);
+  assert.equal(env.db.get('users')?.has('u_b'), true);
+});
+
+test('Owner-only group deletion cascades room_messages and media without affecting moderators, users, or DMs', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('owner_x', { $id: 'owner_x', email: BOOTSTRAPPED_OWNER_EMAIL, name: 'OwnerX', emailVerification: true, labels: [] });
+  env.authUsers.set('mod_x', { $id: 'mod_x', email: 'modx@example.com', name: 'ModX', emailVerification: true, labels: [] });
+  env.authUsers.set('mem_x', { $id: 'mem_x', email: 'memx@example.com', name: 'MemX', emailVerification: true, labels: [] });
+
+  await handleEconomyAction(env.economyCtx('owner_x', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('mod_x', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('mem_x', 'ensureProfile'));
+  await handleAdminAction(env.adminCtx('owner_x', 'adminUpdateUser', { targetUid: 'mod_x', updates: { role: 'moderator' } }));
+
+  const { roomId } = await handleEconomyAction(
+    env.economyCtx('owner_x', 'createMemberRoom', { name: 'جروب للحذف', description: 'وصف', category: 'عام', theme: 'emerald' })
+  );
+  env.storageFiles.set('room_media_1', { $id: 'room_media_1', bucketId: 'fadfada_media' });
+  await handleEconomyAction(
+    env.economyCtx('owner_x', 'sendRoomMessage', {
+      roomId,
+      text: 'صورة داخل الجروب',
+      type: 'image',
+      mediaUrl: 'https://fra.cloud.appwrite.io/v1/storage/buckets/fadfada_media/files/room_media_1/view?project=p',
+    })
+  );
+  await handleEconomyAction(env.economyCtx('owner_x', 'sendPrivateMessage', { recipientId: 'mem_x', text: 'رسالة خاصة باقية' }));
+
+  // Moderator & member are rejected (403) on both deleteRoomAsOwner and deleteContentAsStaff('rooms')
+  await assert.rejects(
+    () => handleAdminAction(env.adminCtx('mod_x', 'deleteRoomAsOwner', { roomId })),
+    (err: unknown) => err instanceof AdminHttpError && err.status === 403
+  );
+  await assert.rejects(
+    () => handleAdminAction(env.adminCtx('mod_x', 'deleteContentAsStaff', { tableKey: 'rooms', rowId: roomId })),
+    (err: unknown) => err instanceof AdminHttpError && err.status === 403
+  );
+  await assert.rejects(
+    () => handleAdminAction(env.adminCtx('mem_x', 'deleteRoomAsOwner', { roomId })),
+    (err: unknown) => err instanceof AdminHttpError && err.status === 403
+  );
+
+  // Owner deletes the room cleanly
+  const delRes = await handleAdminAction(env.adminCtx('owner_x', 'deleteRoomAsOwner', { roomId }));
+  assert.equal(delRes.ok, true);
+  assert.equal(delRes.deletedRoomId, roomId);
+  assert.equal(delRes.deletedMessagesCount, 1);
+  assert.equal(delRes.deletedFilesCount, 1);
+  assert.equal(env.db.get('rooms')?.has(String(roomId)), false);
+  assert.equal(env.storageFiles.has('room_media_1'), false);
+  assert.equal(env.db.get('room_messages')?.size ?? 0, 0);
+  // Users and private messages untouched
+  assert.equal(env.db.get('users')?.has('mem_x'), true);
+  assert.equal((env.db.get('messages')?.size ?? 0) >= 1, true);
+});
+
+test('Owner-configurable roomCreationCost enforces 0 (free), positive coin deduction, and insufficient balance 400', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('owner_p', { $id: 'owner_p', email: BOOTSTRAPPED_OWNER_EMAIL, name: 'OwnerP', emailVerification: true, labels: [] });
+  env.authUsers.set('mem_p', { $id: 'mem_p', email: 'memp@example.com', name: 'MemP', emailVerification: true, labels: [] });
+
+  await handleEconomyAction(env.economyCtx('owner_p', 'ensureProfile'));
+  await handleEconomyAction(env.economyCtx('mem_p', 'ensureProfile'));
+  await handleAdminAction(env.adminCtx('owner_p', 'ensureStaffDefaults'));
+
+  // 1. Set roomCreationCost = 0 -> member with 50 coins creates room for free
+  await handleAdminAction(
+    env.adminCtx('owner_p', 'updateSiteSettings', { settings: { roomCreationCost: 0 } })
+  );
+  const freeRoom = await handleEconomyAction(
+    env.economyCtx('mem_p', 'createMemberRoom', { name: 'جروب مجاني', description: 'مجاني', category: 'عام', theme: 'emerald' })
+  );
+  assert.ok(freeRoom.roomId);
+  let memRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_p' });
+  assert.equal(memRow.coins, 50);
+
+  // 2. Set roomCreationCost = 120 -> member with 50 coins gets 400
+  await handleAdminAction(
+    env.adminCtx('owner_p', 'updateSiteSettings', { settings: { roomCreationCost: 120 } })
+  );
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('mem_p', 'createMemberRoom', { name: 'جروب مدفوع', description: '', category: 'عام', theme: 'emerald' })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 400
+  );
+
+  // 3. Give member 200 coins -> creates room -> exact 120 coins deducted -> 80 remaining
+  await handleAdminAction(
+    env.adminCtx('owner_p', 'adminUpdateUser', { targetUid: 'mem_p', updates: { coins: 200 } })
+  );
+  const paidRoom = await handleEconomyAction(
+    env.economyCtx('mem_p', 'createMemberRoom', { name: 'جروب مدفوع ناجح', description: '', category: 'عام', theme: 'emerald' })
+  );
+  assert.ok(paidRoom.roomId);
+  memRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_p' });
+  assert.equal(memRow.coins, 80);
+});
+
 

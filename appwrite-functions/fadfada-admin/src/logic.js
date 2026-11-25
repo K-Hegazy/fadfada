@@ -109,6 +109,205 @@ async function notify(ctx, { recipientId, senderId, type, title, body }) {
   }
 }
 
+function extractStorageFileId(rawUrl, expectedBucketId = '') {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed || !trimmed.includes('/files/')) return null;
+  if (expectedBucketId && trimmed.includes('/buckets/')) {
+    const bucketMatch = /\/buckets\/([^/]+)\/files\//.exec(trimmed);
+    if (bucketMatch && bucketMatch[1] !== expectedBucketId) {
+      return null;
+    }
+  }
+  const fileMatch = /\/files\/([^/?#]+)\/(?:view|download|preview)/.exec(trimmed);
+  return fileMatch?.[1] ?? null;
+}
+
+async function listAllRowsPaginated(tablesDB, databaseId, tableId, queries = [], Query, maxPages = 50) {
+  const results = [];
+  let cursor = null;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const pageQueries = [...queries, ...(Query?.limit ? [Query.limit(100)] : [])];
+    if (cursor && Query && typeof Query.cursorAfter === 'function') {
+      pageQueries.push(Query.cursorAfter(cursor));
+    }
+    const res = await tablesDB.listRows({
+      databaseId,
+      tableId,
+      queries: pageQueries,
+    });
+    const rows = Array.isArray(res?.rows) ? res.rows : [];
+    results.push(...rows);
+    if (rows.length < 100 || !Query || typeof Query.cursorAfter !== 'function') {
+      break;
+    }
+    const lastId = rows[rows.length - 1]?.$id;
+    if (!lastId || lastId === cursor) break;
+    cursor = lastId;
+  }
+
+  return results;
+}
+
+async function isFileReferencedInTable(tablesDB, databaseId, tableId, columns, fileId, Query) {
+  if (!tableId || !fileId) return false;
+  for (const col of columns) {
+    if (Query && typeof Query.contains === 'function') {
+      try {
+        const res = await tablesDB.listRows({
+          databaseId,
+          tableId,
+          queries: [Query.contains(col, fileId), Query.limit(1)],
+        });
+        if (Array.isArray(res?.rows) && res.rows.length > 0) {
+          return true;
+        }
+        continue;
+      } catch {
+        // Fallback to scan
+      }
+    }
+    try {
+      const rows = await listAllRowsPaginated(tablesDB, databaseId, tableId, [], Query, 25);
+      for (const row of rows) {
+        const val = row?.[col];
+        if (typeof val === 'string' && val.includes(fileId)) {
+          return true;
+        }
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function cleanupOrphanStorageFiles({
+  tablesDB,
+  storageApi,
+  databaseId,
+  bucketId,
+  tables,
+  candidateFileIds,
+  Query,
+}) {
+  let deletedFiles = 0;
+  if (!storageApi || !bucketId || !candidateFileIds || candidateFileIds.size === 0) {
+    return deletedFiles;
+  }
+  const refChecks = [
+    { tableId: tables.messages, columns: ['mediaUrl'] },
+    { tableId: tables.roomMessages, columns: ['mediaUrl'] },
+    { tableId: tables.wallPosts, columns: ['imageUrl'] },
+    { tableId: tables.stories, columns: ['mediaUrl'] },
+    { tableId: tables.users, columns: ['avatar', 'cover'] },
+    { tableId: tables.storeItems, columns: ['imageUrl'] },
+    { tableId: tables.siteSettings, columns: ['siteLogoUrl'] },
+  ];
+
+  for (const fileId of candidateFileIds) {
+    let stillUsed = false;
+    for (const check of refChecks) {
+      if (!check.tableId) continue;
+      if (await isFileReferencedInTable(tablesDB, databaseId, check.tableId, check.columns, fileId, Query)) {
+        stillUsed = true;
+        break;
+      }
+    }
+    if (stillUsed) continue;
+    try {
+      await storageApi.deleteFile({ bucketId, fileId });
+      deletedFiles += 1;
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  return deletedFiles;
+}
+
+async function deleteRoomWithMessagesCascade({
+  roomId,
+  tablesDB,
+  storageApi,
+  databaseId,
+  bucketId,
+  tables,
+  Query,
+}) {
+  const room = await getRowOrNull(tablesDB, databaseId, tables.rooms, roomId);
+  if (!room) {
+    throw new AdminHttpError(404, 'الجروب غير موجود.');
+  }
+
+  const candidateFileIds = new Set();
+  let deletedMessagesCount = 0;
+
+  if (tables.roomMessages) {
+    const seenFailed = new Set();
+    for (let round = 0; round < 100; round += 1) {
+      const queries = Query?.equal
+        ? [Query.equal('roomId', roomId), ...(Query.limit ? [Query.limit(100)] : [])]
+        : [];
+      const res = await tablesDB.listRows({
+        databaseId,
+        tableId: tables.roomMessages,
+        queries,
+      });
+      const rows = (res?.rows || []).filter(
+        (r) => String(r.roomId || '') === roomId && !seenFailed.has(r.$id)
+      );
+      if (rows.length === 0) break;
+
+      let deletedInRound = 0;
+      for (const msg of rows) {
+        const fileId = extractStorageFileId(msg.mediaUrl, bucketId);
+        if (fileId) candidateFileIds.add(fileId);
+        try {
+          await tablesDB.deleteRow({
+            databaseId,
+            tableId: tables.roomMessages,
+            rowId: msg.$id,
+          });
+          deletedMessagesCount += 1;
+          deletedInRound += 1;
+        } catch (err) {
+          if (err?.code === 404) {
+            deletedInRound += 1;
+          } else {
+            seenFailed.add(msg.$id);
+          }
+        }
+      }
+      if (deletedInRound === 0) break;
+    }
+  }
+
+  await tablesDB.deleteRow({
+    databaseId,
+    tableId: tables.rooms,
+    rowId: roomId,
+  });
+
+  const deletedFilesCount = await cleanupOrphanStorageFiles({
+    tablesDB,
+    storageApi,
+    databaseId,
+    bucketId,
+    tables,
+    candidateFileIds,
+    Query,
+  });
+
+  return {
+    ok: true,
+    deletedRoomId: roomId,
+    deletedMessagesCount,
+    deletedFilesCount,
+  };
+}
+
 export async function handleAdminAction(ctx) {
   const {
     callerUid,
@@ -116,11 +315,14 @@ export async function handleAdminAction(ctx) {
     payload = {},
     tablesDB,
     usersApi,
+    storageApi = null,
     databaseId,
+    bucketId = '',
     tables,
     Permission,
     Role,
     ID,
+    Query,
   } = ctx;
 
   if (!callerUid) {
@@ -575,12 +777,45 @@ export async function handleAdminAction(ctx) {
     return { ok: true };
   }
 
+  if (action === 'deleteRoomAsOwner') {
+    if (!isOwner) {
+      throw new AdminHttpError(403, 'حذف الجروب متاح للمالك فقط.');
+    }
+    const roomId = String(payload.roomId || '').trim();
+    if (!roomId) {
+      throw new AdminHttpError(400, 'معرف الجروب مطلوب.');
+    }
+    return await deleteRoomWithMessagesCascade({
+      roomId,
+      tablesDB,
+      storageApi,
+      databaseId,
+      bucketId,
+      tables,
+      Query,
+    });
+  }
+
   if (action === 'deleteContentAsStaff') {
     const tableKey = String(payload.tableKey || '');
     const rowId = String(payload.rowId || '');
     const allowedTables = ['wallPosts', 'stories', 'rooms'];
     if (!allowedTables.includes(tableKey) || !rowId) {
       throw new AdminHttpError(400, 'بيانات الحذف غير صالحة.');
+    }
+    if (tableKey === 'rooms') {
+      if (!isOwner) {
+        throw new AdminHttpError(403, 'حذف الجروب متاح للمالك فقط.');
+      }
+      return await deleteRoomWithMessagesCascade({
+        roomId: rowId,
+        tablesDB,
+        storageApi,
+        databaseId,
+        bucketId,
+        tables,
+        Query,
+      });
     }
     await tablesDB.deleteRow({ databaseId, tableId: tables[tableKey], rowId });
     return { ok: true };

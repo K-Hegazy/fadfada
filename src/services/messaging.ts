@@ -124,6 +124,7 @@ export function subscribeToConversations(
         Query.equal('participantA', currentUid),
         Query.equal('participantB', currentUid),
       ]),
+      Query.orderDesc('$updatedAt'),
       Query.limit(100),
     ],
     mapRow: mapConversationRow,
@@ -148,6 +149,7 @@ export function subscribeToMessages(
     tableId: APPWRITE_CONFIG.tables.messages,
     queries: [
       Query.equal('conversationId', conversationId),
+      Query.orderDesc('$createdAt'),
       Query.limit(200),
     ],
     mapRow: mapMessageRow,

@@ -6,6 +6,7 @@ import {
   Coins,
   Image,
   Megaphone,
+  MessagesSquare,
   Plus,
   Save,
   Search,
@@ -18,7 +19,11 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { subscribeToCreatorProposals } from '../services/community';
+import {
+  deleteRoomAsOwner,
+  subscribeToCreatorProposals,
+  subscribeToRooms,
+} from '../services/community';
 import {
   adminReviewProposal,
   adminSaveDailyTask,
@@ -43,6 +48,7 @@ import type {
   CreatorProposal,
   DailyTask,
   ReportItem,
+  Room,
   SiteSettings,
   StoreItem,
   StoreSection,
@@ -55,10 +61,17 @@ import { DEFAULT_DAILY_TASKS } from '../utils/progression';
 import { Avatar } from './Avatar';
 import { FeedbackBanner, PageHeader, SegmentedTabs } from './ui/Primitives';
 
-type AdminTab = 'users' | 'store' | 'creators' | 'requests' | 'settings';
+type AdminTab = 'users' | 'rooms' | 'store' | 'creators' | 'requests' | 'settings';
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  owner: 'مالك',
+  moderator: 'مشرف',
+  member: 'عضو',
+  guest: 'ضيف مؤقت',
+};
 
 export const AdminPanelView: React.FC = () => {
-  const { profile, users, storeItems, siteSettings, isStaff, isOwner } = useApp();
+  const { profile, users, storeItems, siteSettings, isStaff, isOwner, isPeerOnline } = useApp();
   const [tab, setTab] = useState<AdminTab>('users');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +109,9 @@ export const AdminPanelView: React.FC = () => {
   const [newTaskXp, setNewTaskXp] = useState(25);
 
   // Requests & Moderation collections
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [confirmDeleteRoom, setConfirmDeleteRoom] = useState<Room | null>(null);
+  const [deletingRoomId, setDeletingRoomId] = useState<string | null>(null);
   const [proposals, setProposals] = useState<CreatorProposal[]>([]);
   const [topups, setTopups] = useState<TopupRequest[]>([]);
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
@@ -122,6 +138,7 @@ export const AdminPanelView: React.FC = () => {
     const u4 = subscribeToSupportTickets(profile.uid, true, setTickets);
     const u5 = subscribeToReports(profile.uid, true, setReports);
     const u6 = subscribeToAppeals(profile.uid, true, setAppeals);
+    const u7 = subscribeToRooms(setRooms);
     return () => {
       u1();
       u2();
@@ -129,6 +146,7 @@ export const AdminPanelView: React.FC = () => {
       u4();
       u5();
       u6();
+      u7();
     };
   }, [profile?.uid, isStaff]);
 
@@ -357,12 +375,33 @@ export const AdminPanelView: React.FC = () => {
     }
   };
 
+  const permanentMembersCount = users.filter((u) => u.role !== 'guest' && !u.isAnonymous).length;
+  const activeGuestsCount = users.filter((u) => u.role === 'guest' || u.isAnonymous).length;
+  const liveOnlineCount = users.filter((u) => isPeerOnline(u, true)).length;
+
+  const handleConfirmDeleteRoom = async () => {
+    if (!confirmDeleteRoom || !isOwner || deletingRoomId) return;
+    setError(null);
+    setFeedback(null);
+    const target = confirmDeleteRoom;
+    setDeletingRoomId(target.id);
+    try {
+      await deleteRoomAsOwner(target.id);
+      setConfirmDeleteRoom(null);
+      setFeedback(`تم حذف الجروب "${target.name}" وجميع رسائله بنجاح.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر حذف الجروب.');
+    } finally {
+      setDeletingRoomId(null);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto fadfada-scroll p-4 sm:p-6 pb-24 md:pb-8">
       <div className="max-w-5xl mx-auto space-y-5">
         <PageHeader
           title="لوحة تحكم الإدارة"
-          subtitle="إدارة الأعضاء والصلاحيات، المتجر والمهام، طلبات الشحن، الدعم، المبدعين، وإعدادات المنصة"
+          subtitle="إدارة الأعضاء والصلاحيات، الجروبات، المتجر والمهام، طلبات الشحن، الدعم، المبدعين، وإعدادات المنصة"
           icon={<Shield className="w-5 h-5" />}
         />
 
@@ -375,6 +414,7 @@ export const AdminPanelView: React.FC = () => {
           }}
           items={[
             { id: 'users', label: 'الأعضاء', icon: Users, count: users.length },
+            { id: 'rooms', label: 'الجروبات', icon: MessagesSquare, count: rooms.length },
             { id: 'store', label: 'المتجر والمهام', icon: ShoppingBag },
             {
               id: 'creators',
@@ -393,6 +433,23 @@ export const AdminPanelView: React.FC = () => {
         {/* TAB 1: Users Management */}
         {tab === 'users' && (
           <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-2.5 text-xs">
+              <div className="p-3 rounded-2xl bg-white dark:bg-[#121A17] border border-stone-200/80 dark:border-white/10">
+                <p className="text-stone-500">الأعضاء الدائمون</p>
+                <p className="text-base font-mono font-bold mt-0.5">{permanentMembersCount}</p>
+              </div>
+              <div className="p-3 rounded-2xl bg-white dark:bg-[#121A17] border border-stone-200/80 dark:border-white/10">
+                <p className="text-stone-500">الضيوف النشطون</p>
+                <p className="text-base font-mono font-bold mt-0.5">{activeGuestsCount}</p>
+              </div>
+              <div className="p-3 rounded-2xl bg-white dark:bg-[#121A17] border border-stone-200/80 dark:border-white/10">
+                <p className="text-stone-500">المتصلون الآن</p>
+                <p className="text-base font-mono font-bold text-[#0D7A5F] dark:text-[#6EE7B7] mt-0.5">
+                  {liveOnlineCount}
+                </p>
+              </div>
+            </div>
+
             <div className="relative">
               <Search className="w-4 h-4 text-stone-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
               <input
@@ -407,6 +464,8 @@ export const AdminPanelView: React.FC = () => {
             <div className="space-y-2.5">
               {filteredUsers.map((u) => {
                 const isEditing = editingUid === u.uid;
+                const roleLabel = ROLE_LABELS[u.role] ?? u.role;
+                const onlineNow = isPeerOnline(u, true);
                 return (
                   <div
                     key={u.uid}
@@ -414,10 +473,13 @@ export const AdminPanelView: React.FC = () => {
                   >
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
-                        <Avatar src={u.avatar} name={u.displayName} size="sm" />
+                        <Avatar src={u.avatar} name={u.displayName} size="sm" isOnline={onlineNow} showPresence />
                         <div>
                           <p className="text-sm font-bold flex items-center gap-2">
                             <span>{u.displayName}</span>
+                            <span className="text-[11px] font-semibold text-stone-500 dark:text-stone-400">
+                              · {roleLabel}
+                            </span>
                             {u.isBanned && (
                               <span className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
                                 · محظور
@@ -589,6 +651,53 @@ export const AdminPanelView: React.FC = () => {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* TAB 1B: Rooms / Groups Management (Owner-only delete) */}
+        {tab === 'rooms' && (
+          <div className="space-y-3 text-xs">
+            {!isOwner && (
+              <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
+                عرض الجروبات متاح للمشرفين، بينما حذف الجروب متاح للمالك فقط.
+              </div>
+            )}
+            {rooms.length === 0 ? (
+              <div className="p-6 rounded-2xl bg-white dark:bg-[#121A17] border border-stone-200/80 dark:border-white/10 text-center text-stone-500">
+                لا توجد جروبات حالياً.
+              </div>
+            ) : (
+              rooms.map((room) => (
+                <div
+                  key={room.id}
+                  className="p-4 rounded-2xl bg-white dark:bg-[#121A17] border border-stone-200/80 dark:border-white/10 flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="space-y-0.5 min-w-0">
+                    <p className="text-sm font-bold flex items-center gap-2">
+                      <span className="truncate">{room.name}</span>
+                      {room.isOfficial && (
+                        <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                          · رسمي
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                      {room.category} · بواسطة {room.ownerName || 'غير محدد'} · {room.activeCount} متصل
+                    </p>
+                  </div>
+                  {isOwner && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteRoom(room)}
+                      className="min-h-[36px] px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>حذف الجروب</span>
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         )}
 
@@ -1264,7 +1373,7 @@ export const AdminPanelView: React.FC = () => {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {[
                   { key: 'guestDailyMessageLimit', label: 'حد رسائل الضيف اليومي' },
-                  { key: 'roomCreationCost', label: 'تكلفة إنشاء غرفة' },
+                  { key: 'roomCreationCost', label: 'سعر إنشاء الجروب' },
                   { key: 'randomMatchFreeDaily', label: 'التواصل العشوائي المجاني/يوم' },
                   { key: 'randomMatchCost', label: 'تكلفة التواصل العشوائي المدفوع' },
                   { key: 'randomMatchDurationSec', label: 'مدة التواصل العشوائي (ثانية)' },
@@ -1274,9 +1383,13 @@ export const AdminPanelView: React.FC = () => {
                     <label className="block text-stone-500 mb-1">{f.label}</label>
                     <input
                       type="number"
+                      min={0}
                       value={Number(settingsDraft[f.key as keyof typeof settingsDraft] ?? 0)}
                       onChange={(e) =>
-                        setSettingsDraft((s) => ({ ...s, [f.key]: Number(e.target.value) }))
+                        setSettingsDraft((s) => ({
+                          ...s,
+                          [f.key]: Math.max(0, Number(e.target.value)),
+                        }))
                       }
                       className="w-full min-h-[38px] px-3 rounded-xl border border-stone-200/80 dark:border-white/10 bg-stone-50 dark:bg-[#0A0F0E] font-mono"
                     />
@@ -1552,6 +1665,37 @@ export const AdminPanelView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {confirmDeleteRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-xs p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-[#121A17] border border-stone-200/80 dark:border-white/10 p-5 space-y-4 shadow-2xl fadfada-modal-in">
+            <h3 className="font-display text-base font-bold text-stone-900 dark:text-stone-50">
+              هل أنت متأكد من حذف هذا الجروب؟
+            </h3>
+            <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed">
+              سيتم حذف جروب <strong>{confirmDeleteRoom.name}</strong> وجميع الرسائل المرتبطة به نهائيًا ولا يمكن التراجع عن هذا الإجراء.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={Boolean(deletingRoomId)}
+                onClick={() => setConfirmDeleteRoom(null)}
+                className="min-h-[38px] px-4 rounded-xl border border-stone-200/80 dark:border-white/10 text-xs font-semibold cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingRoomId)}
+                onClick={() => void handleConfirmDeleteRoom()}
+                className="min-h-[38px] px-4 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+              >
+                {deletingRoomId ? 'جاري الحذف...' : 'حذف'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

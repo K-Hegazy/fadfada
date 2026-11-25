@@ -113,9 +113,14 @@ export const RoomsView: React.FC = () => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const activeRoomIdRef = useRef<string | null>(null);
   const uidRef = useRef<string | null>(null);
+  const roomsLoadedOnceRef = useRef(false);
+  const wasActiveRoomPresentRef = useRef(false);
 
   useEffect(() => {
     activeRoomIdRef.current = activeRoomId;
+    if (!activeRoomId) {
+      wasActiveRoomPresentRef.current = false;
+    }
   }, [activeRoomId]);
 
   useEffect(() => {
@@ -145,7 +150,10 @@ export const RoomsView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const unsub = subscribeToRooms(setRooms);
+    const unsub = subscribeToRooms((nextRooms) => {
+      roomsLoadedOnceRef.current = true;
+      setRooms(nextRooms);
+    });
     return () => unsub();
   }, []);
 
@@ -195,6 +203,24 @@ export const RoomsView: React.FC = () => {
   );
 
   useEffect(() => {
+    if (!activeRoomId) return;
+    if (activeRoom) {
+      wasActiveRoomPresentRef.current = true;
+      return;
+    }
+    if (roomsLoadedOnceRef.current && wasActiveRoomPresentRef.current) {
+      wasActiveRoomPresentRef.current = false;
+      setActiveRoomId(null);
+      setConfirmLeaveOpen(false);
+      setShowRoomMembers(false);
+      setEditingPin(false);
+      setReplyTo(null);
+      setEditingMsg(null);
+      setSendError('تم حذف هذا الجروب من قبل المالك.');
+    }
+  }, [activeRoomId, activeRoom]);
+
+  useEffect(() => {
     if (!activeRoomId) {
       setMessages([]);
       setReplyTo(null);
@@ -230,6 +256,9 @@ export const RoomsView: React.FC = () => {
   }, [rooms, categoryFilter, searchTerm]);
 
   if (!profile) return null;
+
+  const roomCost = Math.max(0, Math.floor(siteSettings.roomCreationCost ?? 0));
+  const roomCostLabel = roomCost === 0 ? 'مجاني' : `${roomCost} عملة`;
 
   const isMemberOfActiveRoom = activeRoom
     ? (activeRoom.memberIds ?? []).includes(profile.uid)
@@ -1091,7 +1120,7 @@ export const RoomsView: React.FC = () => {
                 className="min-h-[34px] px-3 rounded-md bg-[#0B7A62] hover:bg-[#08614D] text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
-                <span>إنشاء غرفة ({siteSettings.roomCreationCost})</span>
+                <span>إنشاء غرفة ({roomCostLabel})</span>
               </button>
             )
           }
@@ -1264,13 +1293,18 @@ export const RoomsView: React.FC = () => {
               </div>
             </div>
 
+            <div className="text-xs text-slate-600 dark:text-slate-300 flex items-center justify-between px-3 py-2 rounded-lg bg-[#F2F4F7] dark:bg-[#0B1114]">
+              <span>سعر إنشاء الجروب</span>
+              <strong className="font-mono text-[#0B7A62] dark:text-[#34D399]">{roomCostLabel}</strong>
+            </div>
+
             {createError && <FeedbackBanner type="error" message={createError} />}
 
             <button
               type="submit"
               className="w-full min-h-[42px] rounded-lg bg-[#0B7A62] hover:bg-[#08614D] text-white text-xs sm:text-sm font-semibold cursor-pointer transition-colors"
             >
-              إنشاء وخصم {siteSettings.roomCreationCost} عملة
+              {roomCost === 0 ? 'إنشاء الغرفة (مجاني)' : `إنشاء وخصم ${roomCost} عملة`}
             </button>
           </form>
         </div>

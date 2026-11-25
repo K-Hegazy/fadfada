@@ -65,7 +65,7 @@ export function subscribeToNotifications(
 ): () => void {
   return subscribeToTableRows<AppNotification>({
     tableId: APPWRITE_CONFIG.tables.notifications,
-    queries: [Query.equal('recipientId', uid), Query.limit(60)],
+    queries: [Query.equal('recipientId', uid), Query.orderDesc('$createdAt'), Query.limit(60)],
     mapRow: (row) => ({
       id: String(row.$id),
       recipientId: String(row.recipientId || ''),
@@ -517,7 +517,9 @@ export function subscribeToTopups(
 ): () => void {
   return subscribeToTableRows<TopupRequest>({
     tableId: APPWRITE_CONFIG.tables.topupRequests,
-    queries: isStaffUser ? [Query.limit(100)] : [Query.equal('userId', uid), Query.limit(50)],
+    queries: isStaffUser
+      ? [Query.orderDesc('$createdAt'), Query.limit(100)]
+      : [Query.equal('userId', uid), Query.orderDesc('$createdAt'), Query.limit(50)],
     mapRow: (row) => ({
       id: String(row.$id),
       userId: String(row.userId || ''),
@@ -564,7 +566,9 @@ export function subscribeToSupportTickets(
 ): () => void {
   return subscribeToTableRows<SupportTicket>({
     tableId: APPWRITE_CONFIG.tables.supportTickets,
-    queries: isStaffUser ? [Query.limit(100)] : [Query.equal('userId', uid), Query.limit(50)],
+    queries: isStaffUser
+      ? [Query.orderDesc('$createdAt'), Query.limit(100)]
+      : [Query.equal('userId', uid), Query.orderDesc('$createdAt'), Query.limit(50)],
     mapRow: (row) => ({
       id: String(row.$id),
       userId: String(row.userId || ''),
@@ -612,7 +616,9 @@ export function subscribeToReports(
 ): () => void {
   return subscribeToTableRows<ReportItem>({
     tableId: APPWRITE_CONFIG.tables.reports,
-    queries: isStaffUser ? [Query.limit(100)] : [Query.equal('reporterId', uid), Query.limit(50)],
+    queries: isStaffUser
+      ? [Query.orderDesc('$createdAt'), Query.limit(100)]
+      : [Query.equal('reporterId', uid), Query.orderDesc('$createdAt'), Query.limit(50)],
     mapRow: (row) => ({
       id: String(row.$id),
       reporterId: String(row.reporterId || ''),
@@ -664,7 +670,9 @@ export function subscribeToAppeals(
 ): () => void {
   return subscribeToTableRows<AppealItem>({
     tableId: APPWRITE_CONFIG.tables.appeals,
-    queries: isStaffUser ? [Query.limit(100)] : [Query.equal('userId', uid), Query.limit(30)],
+    queries: isStaffUser
+      ? [Query.orderDesc('$createdAt'), Query.limit(100)]
+      : [Query.equal('userId', uid), Query.orderDesc('$createdAt'), Query.limit(30)],
     mapRow: (row) => ({
       id: String(row.$id),
       userId: String(row.userId || ''),

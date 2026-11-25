@@ -1,9 +1,11 @@
-import { Client, ID, Permission, Query, Role, TablesDB, Users } from 'node-appwrite';
+import { Client, ID, Permission, Query, Role, Storage, TablesDB, Users } from 'node-appwrite';
 import { AdminHttpError, handleAdminAction } from './logic.js';
 
 const TABLES = {
   users: process.env.APPWRITE_TABLE_USERS || 'users',
   rooms: process.env.APPWRITE_TABLE_ROOMS || 'rooms',
+  roomMessages: process.env.APPWRITE_TABLE_ROOM_MESSAGES || 'room_messages',
+  messages: process.env.APPWRITE_TABLE_MESSAGES || 'messages',
   stories: process.env.APPWRITE_TABLE_STORIES || 'stories',
   wallPosts: process.env.APPWRITE_TABLE_WALL_POSTS || 'wall_posts',
   creatorProposals: process.env.APPWRITE_TABLE_CREATOR_PROPOSALS || 'creator_proposals',
@@ -25,6 +27,7 @@ export default async ({ req, res, log, error }) => {
     const apiKey = req.headers['x-appwrite-key'] || process.env.APPWRITE_API_KEY || '';
     const callerUid = req.headers['x-appwrite-user-id'] || '';
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'fadfada_db';
+    const bucketId = process.env.APPWRITE_STORAGE_BUCKET_ID || 'fadfada_media';
 
     if (!projectId || !apiKey) {
       return res.json({ ok: false, error: 'خادم Appwrite Admin Function غير مهيأ بمفاتيح المشروع.' }, 500);
@@ -33,6 +36,7 @@ export default async ({ req, res, log, error }) => {
     const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
     const tablesDB = new TablesDB(client);
     const usersApi = new Users(client);
+    const storageApi = new Storage(client);
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const { action, ...payload } = body;
@@ -45,7 +49,9 @@ export default async ({ req, res, log, error }) => {
       payload,
       tablesDB,
       usersApi,
+      storageApi,
       databaseId,
+      bucketId,
       tables: TABLES,
       Permission,
       Role,

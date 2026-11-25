@@ -17,6 +17,19 @@ type InternalRealtimeShape = {
 };
 
 let resilienceInitialized = false;
+let hasConnectedOnce = false;
+let needsResyncOnOpen = false;
+const reconnectListeners = new Set<() => void>();
+
+function notifyReconnectListeners(): void {
+  for (const listener of reconnectListeners) {
+    try {
+      listener();
+    } catch {
+      // Non-blocking reconnect resync
+    }
+  }
+}
 
 function ensureRealtimeResilience(): void {
   if (resilienceInitialized || !isAppwriteConfigured || typeof window === 'undefined') {
@@ -26,26 +39,54 @@ function ensureRealtimeResilience(): void {
 
   const rt = realtime as unknown as InternalRealtimeShape;
 
+  realtime.onOpen?.(() => {
+    if (!hasConnectedOnce) {
+      hasConnectedOnce = true;
+      needsResyncOnOpen = false;
+      return;
+    }
+    if (needsResyncOnOpen) {
+      needsResyncOnOpen = false;
+      notifyReconnectListeners();
+    }
+  });
+
+  realtime.onClose?.(() => {
+    if (hasConnectedOnce) {
+      needsResyncOnOpen = true;
+    }
+  });
+
   realtime.onError(() => {
+    if (hasConnectedOnce) {
+      needsResyncOnOpen = true;
+    }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       rt.reconnect = false;
     }
   });
 
   window.addEventListener('offline', () => {
+    if (hasConnectedOnce) {
+      needsResyncOnOpen = true;
+    }
     rt.reconnect = false;
     void rt.closeSocket?.().catch(() => {});
   });
 
   window.addEventListener('online', () => {
+    needsResyncOnOpen = true;
     const hasWork = Boolean(rt.activeSubscriptions?.size || rt.pendingPresence);
     if (!hasWork) return;
     rt.reconnect = true;
     void rt.createSocket?.().catch(() => {});
+    notifyReconnectListeners();
   });
 }
 
 export async function disconnectRealtime(): Promise<void> {
+  hasConnectedOnce = false;
+  needsResyncOnOpen = false;
   if (!isAppwriteConfigured) return;
   try {
     await realtime.disconnect();
@@ -74,7 +115,7 @@ export interface TableSubscriptionOptions<T> {
 
 /**
  * Subscribes to an Appwrite TablesDB table via initial fetch + Appwrite Realtime WebSocket channel.
- * Properly cleans up even if unmounted before the WebSocket promise settles.
+ * Properly cleans up even if unmounted before the WebSocket promise settles, and resyncs on reconnect.
  */
 export function subscribeToTableRows<T>({
   tableId,
@@ -96,6 +137,8 @@ export function subscribeToTableRows<T>({
   let disposed = false;
   const rowsByKey = new Map<string, T>();
   let subscriptionHandle: { unsubscribe: () => Promise<void> } | null = null;
+  let loadingInitial = false;
+  let resyncPending = false;
 
   const resolveKey = (item: T, raw: AppwriteRow): string => {
     if (getKey) return getKey(item, raw);
@@ -113,6 +156,12 @@ export function subscribeToTableRows<T>({
   };
 
   const loadInitial = async () => {
+    if (disposed) return;
+    if (loadingInitial) {
+      resyncPending = true;
+      return;
+    }
+    loadingInitial = true;
     try {
       const rows = await listTableRows(tableId, queries);
       if (disposed) return;
@@ -129,8 +178,19 @@ export function subscribeToTableRows<T>({
       if (!disposed && onError) {
         onError(parseAppwriteError(error));
       }
+    } finally {
+      loadingInitial = false;
+      if (resyncPending && !disposed) {
+        resyncPending = false;
+        void loadInitial();
+      }
     }
   };
+
+  const handleReconnect = () => {
+    void loadInitial();
+  };
+  reconnectListeners.add(handleReconnect);
 
   void loadInitial();
 
@@ -167,6 +227,7 @@ export function subscribeToTableRows<T>({
 
   return () => {
     disposed = true;
+    reconnectListeners.delete(handleReconnect);
     if (subscriptionHandle) {
       const sub = subscriptionHandle;
       subscriptionHandle = null;
@@ -191,15 +252,27 @@ export function subscribeToSingleRow<T>(options: {
   ensureRealtimeResilience();
   let disposed = false;
   let subscriptionHandle: { unsubscribe: () => Promise<void> } | null = null;
+  let loadingSingle = false;
 
-  void options
-    .fetchRow()
-    .then((item) => {
+  const loadSingle = async () => {
+    if (disposed || loadingSingle) return;
+    loadingSingle = true;
+    try {
+      const item = await options.fetchRow();
       if (!disposed) options.onData(item);
-    })
-    .catch((err) => {
+    } catch (err) {
       if (!disposed && options.onError) options.onError(parseAppwriteError(err));
-    });
+    } finally {
+      loadingSingle = false;
+    }
+  };
+
+  const handleReconnect = () => {
+    void loadSingle();
+  };
+  reconnectListeners.add(handleReconnect);
+
+  void loadSingle();
 
   const channel = Channel.tablesdb(APPWRITE_CONFIG.databaseId)
     .table(options.tableId)
@@ -226,6 +299,7 @@ export function subscribeToSingleRow<T>(options: {
 
   return () => {
     disposed = true;
+    reconnectListeners.delete(handleReconnect);
     if (subscriptionHandle) {
       const sub = subscriptionHandle;
       subscriptionHandle = null;
