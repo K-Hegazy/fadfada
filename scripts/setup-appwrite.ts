@@ -170,6 +170,7 @@ const TABLES_SCHEMA: TableSpec[] = [
       { kind: 'varchar', key: 'gender', size: 24, xdefault: 'unspecified' },
       { kind: 'integer', key: 'age', xdefault: 0 },
       { kind: 'varchar', key: 'country', size: 64, xdefault: '' },
+      { kind: 'varchar', key: 'countryCode', size: 8, xdefault: '' },
       { kind: 'varchar', key: 'countryFlag', size: 24, xdefault: '' },
       { kind: 'varchar', key: 'maritalStatus', size: 24, xdefault: 'single' },
       { kind: 'varchar', key: 'partnerUid', size: 64, xdefault: '' },

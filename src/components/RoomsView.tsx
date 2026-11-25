@@ -43,7 +43,7 @@ import { uploadChatImage, uploadChatVideo, uploadChatVoice } from '../services/s
 import { useApp } from '../state/AppContext';
 import type { Room, SimpleMessage } from '../types/fadfada';
 import { formatArabicTime, formatDurationMmSs } from '../utils/formatters';
-import { CHAT_THEMES, VIP_LABELS } from '../utils/progression';
+import { CHAT_THEMES, displayCountryName, VIP_LABELS } from '../utils/progression';
 import { Avatar } from './Avatar';
 import { MediaViewerModal } from './MediaViewerModal';
 import { EmptyState, FeedbackBanner, PageHeader } from './ui/Primitives';
@@ -1034,7 +1034,7 @@ export const RoomsView: React.FC = () => {
                           {u.displayName}
                         </p>
                         <p className="text-[10px] text-slate-400 truncate">
-                          {u.countryFlag} متصل الآن
+                          {displayCountryName(u.country, u.countryFlag)} · متصل الآن
                         </p>
                       </div>
                     </button>

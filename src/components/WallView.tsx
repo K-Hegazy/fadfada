@@ -30,7 +30,7 @@ import { uploadImageAsset } from '../services/storage';
 import { useApp } from '../state/AppContext';
 import type { Room, SimpleMessage, WallPost } from '../types/fadfada';
 import { formatArabicTime, timestampToMillis } from '../utils/formatters';
-import { CHAT_THEMES, VIP_LABELS } from '../utils/progression';
+import { CHAT_THEMES, displayCountryName, isKnownCountry, VIP_LABELS } from '../utils/progression';
 import { AdSlot } from './AdSlot';
 import { Avatar } from './Avatar';
 import { MegaphoneBar } from './MegaphoneBar';
@@ -297,7 +297,7 @@ export const WallView: React.FC = () => {
                         {u.displayName}
                       </p>
                       <p className="text-[10px] text-[#0B7A62] dark:text-[#34D399] truncate">
-                        متصل · {u.countryFlag}
+                        {isKnownCountry(u.country) ? `${u.countryFlag} ${u.country}` : 'متصل الآن'}
                       </p>
                     </div>
                   </button>
@@ -910,7 +910,7 @@ export const WallView: React.FC = () => {
                             {u.displayName}
                           </p>
                           <p className="text-[10px] text-slate-400 truncate">
-                            {u.countryFlag} {u.country} · متصل الآن
+                            {displayCountryName(u.country, u.countryFlag)} · متصل الآن
                           </p>
                         </div>
                       </button>

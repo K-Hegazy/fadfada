@@ -39,6 +39,7 @@ import {
   getEffectiveVipTier,
   getGenderStyle,
   getLevelProgress,
+  isKnownCountry,
   VIP_LABELS,
 } from '../utils/progression';
 import { Avatar } from './Avatar';
@@ -77,6 +78,7 @@ export const ProfilePanel: React.FC = () => {
     getPeerLastSeenMillis,
     openProfileModal,
     usersById,
+    countryDetectionFailed,
   } = useApp();
 
   const [tab, setTab] = useState<SettingsTab>('overview');
@@ -92,6 +94,7 @@ export const ProfilePanel: React.FC = () => {
   const [gender, setGender] = useState<GenderType>('unspecified');
   const [age, setAge] = useState(0);
   const [country, setCountry] = useState('');
+  const [countryCode, setCountryCode] = useState('');
   const [countryFlag, setCountryFlag] = useState('');
   const [maritalStatus, setMaritalStatus] = useState<MaritalStatusType>('single');
   const [affiliation, setAffiliation] = useState('');
@@ -125,6 +128,7 @@ export const ProfilePanel: React.FC = () => {
     setGender(profile.gender);
     setAge(profile.age);
     setCountry(profile.country);
+    setCountryCode(profile.countryCode);
     setCountryFlag(profile.countryFlag);
     setMaritalStatus(profile.maritalStatus);
     setAffiliation(profile.affiliation);
@@ -182,6 +186,7 @@ export const ProfilePanel: React.FC = () => {
         gender,
         age,
         country,
+        countryCode,
         countryFlag,
         maritalStatus,
         affiliation,
@@ -211,6 +216,7 @@ export const ProfilePanel: React.FC = () => {
         gender,
         age,
         country,
+        countryCode,
         countryFlag,
         maritalStatus,
         affiliation,
@@ -237,6 +243,7 @@ export const ProfilePanel: React.FC = () => {
         gender,
         age,
         country,
+        countryCode,
         countryFlag,
         maritalStatus,
         affiliation,
@@ -708,17 +715,28 @@ export const ProfilePanel: React.FC = () => {
                   onChange={(e) => {
                     const found = COUNTRIES.find((c) => c.name === e.target.value);
                     setCountry(e.target.value);
+                    setCountryCode(found?.code ?? '');
                     setCountryFlag(found?.flag ?? '');
                   }}
                   className="w-full min-h-[38px] px-3 rounded-lg border border-slate-200/80 dark:border-white/10 bg-[#F2F4F7] dark:bg-[#0B1114] text-sm"
                 >
                   <option value="">دولة غير محددة</option>
+                  {isKnownCountry(country) && !COUNTRIES.some((c) => c.name === country) && (
+                    <option value={country}>
+                      {countryFlag ? `${countryFlag} ${country}` : country}
+                    </option>
+                  )}
                   {COUNTRIES.map((c) => (
                     <option key={c.name} value={c.name}>
                       {c.flag} {c.name}
                     </option>
                   ))}
                 </select>
+                {countryDetectionFailed && !isKnownCountry(country) && (
+                  <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+                    تعذر تحديد الدولة تلقائيًا — يمكنك اختيار دولتك يدويًا من القائمة ثم الحفظ.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-semibold mb-1">الحالة الاجتماعية</label>

@@ -44,6 +44,7 @@ export function mapUserRow(row: AppwriteRow): UserProfile {
     gender: (row.gender as GenderType) || 'unspecified',
     age: Number(row.age ?? 0),
     country: String(row.country ?? ''),
+    countryCode: String(row.countryCode ?? '').trim().toUpperCase(),
     countryFlag: String(row.countryFlag ?? ''),
     maritalStatus: (row.maritalStatus as MaritalStatusType) || 'single',
     partnerUid: String(row.partnerUid || ''),
@@ -102,6 +103,7 @@ export function normalizeUserProfile(raw: Partial<UserProfile> & { uid: string }
     gender: raw.gender ?? 'unspecified',
     age: raw.age ?? 0,
     country: raw.country ?? '',
+    countryCode: (raw.countryCode ?? '').trim().toUpperCase(),
     countryFlag: raw.countryFlag ?? '',
     maritalStatus: raw.maritalStatus ?? 'single',
     partnerUid: raw.partnerUid ?? '',
@@ -150,11 +152,16 @@ export function normalizeUserProfile(raw: Partial<UserProfile> & { uid: string }
 
 export async function ensureUserProfile(
   _user?: AuthUser,
-  options?: { guestProfile?: GuestEntryInput; acceptedTerms?: boolean }
+  options?: {
+    guestProfile?: GuestEntryInput;
+    acceptedTerms?: boolean;
+    detectedCountry?: { country: string; countryCode: string; countryFlag: string } | null;
+  }
 ): Promise<void> {
   await executeAppwriteFunction(APPWRITE_CONFIG.economyFunctionId, 'ensureProfile', {
     ...(options?.guestProfile ? { guestProfile: options.guestProfile } : {}),
     ...(options?.acceptedTerms !== undefined ? { acceptedTerms: options.acceptedTerms } : {}),
+    ...(options?.detectedCountry ? { detectedCountry: options.detectedCountry } : {}),
   });
 }
 
@@ -167,6 +174,7 @@ export interface ProfileUpdateInput {
   gender: GenderType;
   age: number;
   country: string;
+  countryCode?: string;
   countryFlag: string;
   maritalStatus: MaritalStatusType;
   affiliation: string;
@@ -212,9 +220,24 @@ export async function updateUserProfile(_uid: string, input: ProfileUpdateInput)
     gender: input.gender,
     age: Math.floor(input.age),
     country: input.country.trim().slice(0, 60),
+    countryCode: String(input.countryCode || '').trim().toUpperCase().slice(0, 8),
     countryFlag: input.countryFlag.trim().slice(0, 16),
     maritalStatus: input.maritalStatus,
     affiliation: input.affiliation.trim().slice(0, 60),
+  });
+}
+
+export async function syncUserCountry(input: {
+  country: string;
+  countryCode: string;
+  countryFlag: string;
+}): Promise<void> {
+  const cleanCountry = input.country.trim().slice(0, 60);
+  if (!cleanCountry) return;
+  await executeAppwriteFunction(APPWRITE_CONFIG.economyFunctionId, 'syncUserCountry', {
+    country: cleanCountry,
+    countryCode: input.countryCode.trim().toUpperCase().slice(0, 8),
+    countryFlag: input.countryFlag.trim().slice(0, 16),
   });
 }
 

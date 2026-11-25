@@ -216,6 +216,54 @@ async function listRowsSafe(tablesDB, params) {
   }
 }
 
+function sanitizeCountryPayload(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const rawCountry = String(src.country ?? '').trim();
+  const cleanCountry =
+    rawCountry === 'أخرى' || rawCountry === 'غير محدد' || rawCountry === 'دولة غير محددة'
+      ? ''
+      : rawCountry.slice(0, 60);
+  const rawCode = String(src.countryCode ?? '').trim().toUpperCase();
+  const cleanCode = /^[A-Z]{2}$/.test(rawCode) ? rawCode : '';
+  const cleanFlag = cleanCountry ? String(src.countryFlag ?? '').trim().slice(0, 16) : '';
+  return {
+    country: cleanCountry,
+    countryCode: cleanCountry ? cleanCode : '',
+    countryFlag: cleanFlag,
+  };
+}
+
+function isUnknownCountryCodeAttrError(err) {
+  const msg = String(err?.message || '');
+  return err?.code === 400 && msg.includes('countryCode');
+}
+
+async function createUserRowWithCountryFallback(tablesDB, params) {
+  try {
+    return await tablesDB.createRow(params);
+  } catch (err) {
+    if (isUnknownCountryCodeAttrError(err) && 'countryCode' in (params.data || {})) {
+      const fallbackData = { ...(params.data || {}) };
+      delete fallbackData.countryCode;
+      return await tablesDB.createRow({ ...params, data: fallbackData });
+    }
+    throw err;
+  }
+}
+
+async function updateUserRowWithCountryFallback(tablesDB, params) {
+  try {
+    return await tablesDB.updateRow(params);
+  } catch (err) {
+    if (isUnknownCountryCodeAttrError(err) && 'countryCode' in (params.data || {})) {
+      const fallbackData = { ...(params.data || {}) };
+      delete fallbackData.countryCode;
+      return await tablesDB.updateRow({ ...params, data: fallbackData });
+    }
+    throw err;
+  }
+}
+
 const GUEST_ABANDONED_TTL_MS = 15 * 60 * 1000;
 
 async function purgeGuestRecordsAndAuth({
@@ -563,8 +611,9 @@ export async function handleEconomyAction(ctx) {
         initialAge = gAge;
       }
 
+      const initialCountry = sanitizeCountryPayload(payload.detectedCountry || {});
       const role = isOwnerEmail ? 'owner' : isAnonymous ? 'guest' : 'member';
-      profileRow = await tablesDB.createRow({
+      profileRow = await createUserRowWithCountryFallback(tablesDB, {
         databaseId,
         tableId: tables.users,
         rowId: callerUid,
@@ -577,8 +626,9 @@ export async function handleEconomyAction(ctx) {
           bio: isAnonymous ? 'ضيف في منصة فضفضة' : 'عضو جديد في فضفضة',
           gender: initialGender,
           age: initialAge,
-          country: '',
-          countryFlag: '',
+          country: initialCountry.country,
+          countryCode: initialCountry.countryCode,
+          countryFlag: initialCountry.countryFlag,
           maritalStatus: 'single',
           partnerUid: '',
           partnerName: '',
@@ -753,6 +803,27 @@ export async function handleEconomyAction(ctx) {
     });
   }
 
+  if (action === 'syncUserCountry') {
+    if ((payload.targetUid && payload.targetUid !== callerUid) || (payload.uid && payload.uid !== callerUid)) {
+      throw new HttpError(403, 'غير مصرح لك بتعديل دولة مستخدم آخر.');
+    }
+    const clean = sanitizeCountryPayload(payload);
+    if (!clean.country) {
+      throw new HttpError(400, 'بيانات الدولة غير صالحة.');
+    }
+    return await updateUserRowWithCountryFallback(tablesDB, {
+      databaseId,
+      tableId: tables.users,
+      rowId: callerUid,
+      data: {
+        country: clean.country,
+        countryCode: clean.countryCode,
+        countryFlag: clean.countryFlag,
+        lastSeen: nowIso,
+      },
+    });
+  }
+
   if (action === 'submitAppeal') {
     const reason = String(payload.reason || '').trim().slice(0, 1000);
     if (!reason) throw new HttpError(400, 'يرجى كتابة سبب الالتماس.');
@@ -776,6 +847,9 @@ export async function handleEconomyAction(ctx) {
   assertNotBanned(caller);
 
   if (action === 'updateProfile') {
+    if ((payload.targetUid && payload.targetUid !== callerUid) || (payload.uid && payload.uid !== callerUid)) {
+      throw new HttpError(403, 'غير مصرح لك بتعديل ملف مستخدم آخر.');
+    }
     const username = String(payload.username || '').trim().toLowerCase();
     const displayName = String(payload.displayName || '').trim();
     const bio = String(payload.bio || '').trim();
@@ -817,10 +891,9 @@ export async function handleEconomyAction(ctx) {
         ? requestedMarital
         : 'single';
 
-    const rawCountry = String(payload.country ?? '').trim();
-    const cleanCountry = rawCountry === 'أخرى' || rawCountry === 'غير محدد' ? '' : rawCountry.slice(0, 60);
+    const cleanCountryData = sanitizeCountryPayload(payload);
 
-    return await tablesDB.updateRow({
+    return await updateUserRowWithCountryFallback(tablesDB, {
       databaseId,
       tableId: tables.users,
       rowId: callerUid,
@@ -832,8 +905,9 @@ export async function handleEconomyAction(ctx) {
         bio,
         gender,
         age,
-        country: cleanCountry,
-        countryFlag: cleanCountry ? String(payload.countryFlag || '').trim().slice(0, 16) : '',
+        country: cleanCountryData.country,
+        countryCode: cleanCountryData.countryCode,
+        countryFlag: cleanCountryData.countryFlag,
         maritalStatus,
         affiliation: String(payload.affiliation || '').trim().slice(0, 60),
         isPublic: true,

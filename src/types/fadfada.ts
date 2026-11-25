@@ -45,6 +45,7 @@ export interface UserProfile {
   gender: GenderType;
   age: number;
   country: string;
+  countryCode: string;
   countryFlag: string;
   maritalStatus: MaritalStatusType;
   partnerUid: string;

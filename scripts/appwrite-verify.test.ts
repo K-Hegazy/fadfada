@@ -29,6 +29,12 @@ import {
   isUserPresenceOnline,
 } from '../src/services/presence.js';
 import {
+  countryCodeToFlag,
+  detectUserCountry,
+  resetGeolocationCacheForTests,
+  resolveArabicCountryName,
+} from '../src/services/geolocation.js';
+import {
   getGenderStyle,
   normalizeGender,
   sortOnlineUsers,
@@ -1138,6 +1144,7 @@ test('Presence TTL helpers expire stale/offline guests cleanly while preserving 
     gender: 'male',
     age: 22,
     country: '',
+    countryCode: '',
     countryFlag: '',
     maritalStatus: 'single',
     partnerUid: '',
@@ -1407,6 +1414,210 @@ test('Owner-configurable roomCreationCost enforces 0 (free), positive coin deduc
   assert.ok(paidRoom.roomId);
   memRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_p' });
   assert.equal(memRow.coins, 80);
+});
+
+test('IP Geolocation detects country via HTTPS, supports fallback & timeout, caches result, and never uses GPS or stores IP', async () => {
+  resetGeolocationCacheForTests();
+
+  // Verify no navigator.geolocation anywhere in src/
+  const walkSrc = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...walkSrc(full));
+      else if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) out.push(full);
+    }
+    return out;
+  };
+  for (const file of walkSrc(path.join(ROOT_DIR, 'src'))) {
+    const content = fs.readFileSync(file, 'utf8');
+    assert.equal(/navigator\.geolocation/i.test(content), false, `Must not use GPS geolocation in ${file}`);
+  }
+
+  // 1. Primary HTTPS provider (ipwho.is) succeeds and caches without storing IP
+  let calls = 0;
+  const primaryFetch = (async (input: RequestInfo | URL) => {
+    calls += 1;
+    assert.ok(String(input).startsWith('https://'), 'Geolocation endpoint must use HTTPS');
+    return new Response(
+      JSON.stringify({
+        success: true,
+        ip: '41.234.56.78',
+        country: 'Egypt',
+        country_code: 'EG',
+        flag: { emoji: '🇪🇬' },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as unknown as typeof fetch;
+
+  const first = await detectUserCountry({ fetchImpl: primaryFetch });
+  assert.deepEqual(first, { country: 'مصر', countryCode: 'EG', countryFlag: '🇪🇬' });
+  assert.equal('ip' in (first as unknown as Record<string, unknown>), false);
+  assert.equal(calls, 1);
+
+  // Subsequent call uses cache without hitting network
+  const cached = await detectUserCountry({ fetchImpl: primaryFetch });
+  assert.deepEqual(cached, first);
+  assert.equal(calls, 1);
+
+  // 2. Primary fails/times out -> falls back to ipapi.co
+  resetGeolocationCacheForTests();
+  const hitUrls: string[] = [];
+  const fallbackFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    hitUrls.push(url);
+    if (url.includes('ipwho.is')) {
+      return new Response('rate limited', { status: 429 });
+    }
+    if (url.includes('ipapi.co')) {
+      assert.equal(init?.cache, 'no-store');
+      return new Response(
+        JSON.stringify({
+          ip: '5.6.7.8',
+          country_code: 'SA',
+          country_name: 'Saudi Arabia',
+        }),
+        { status: 200 }
+      );
+    }
+    throw new Error('Unexpected provider');
+  }) as unknown as typeof fetch;
+
+  const fallbackRes = await detectUserCountry({ fetchImpl: fallbackFetch, forceRefresh: true });
+  assert.deepEqual(fallbackRes, { country: 'السعودية', countryCode: 'SA', countryFlag: '🇸🇦' });
+  assert.equal(hitUrls.length, 2);
+
+  // 3. Primary + Fallback1 fail -> Fallback2 (api.country.is) + Arabic Intl fallback
+  resetGeolocationCacheForTests();
+  const secondFallbackFetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('country.is')) {
+      return new Response(JSON.stringify({ ip: '1.2.3.4', country: 'DE' }), { status: 200 });
+    }
+    return new Response('{}', { status: 503 });
+  }) as unknown as typeof fetch;
+
+  const deRes = await detectUserCountry({ fetchImpl: secondFallbackFetch, forceRefresh: true });
+  assert.ok(deRes);
+  assert.equal(deRes.countryCode, 'DE');
+  assert.equal(deRes.countryFlag, countryCodeToFlag('DE'));
+  assert.equal(deRes.country, resolveArabicCountryName('DE'));
+
+  // 4. All providers timeout/abort or error -> cleanly returns null without throwing
+  resetGeolocationCacheForTests();
+  const hangingFetch = ((_input: RequestInfo | URL, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+    })) as unknown as typeof fetch;
+
+  const failedRes = await detectUserCountry({
+    fetchImpl: hangingFetch,
+    forceRefresh: true,
+    timeoutMs: 25,
+  });
+  assert.equal(failedRes, null);
+  resetGeolocationCacheForTests();
+});
+
+test('Server-side syncUserCountry stores country safely, blocks cross-user writes (403), and grants no guest privileges', async () => {
+  const env = createInMemoryEnv();
+  env.authUsers.set('mem_geo', { $id: 'mem_geo', email: 'geo@example.com', name: 'GeoMember', emailVerification: true, labels: [] });
+  env.authUsers.set('guest_geo', { $id: 'guest_geo', email: '', name: '', emailVerification: false, labels: [] });
+
+  // ensureProfile attaches detectedCountry cleanly for registered members without storing IP
+  await handleEconomyAction(
+    env.economyCtx('mem_geo', 'ensureProfile', {
+      detectedCountry: { country: 'مصر', countryCode: 'EG', countryFlag: '🇪🇬', ip: '1.2.3.4' },
+    })
+  );
+  let memRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_geo' });
+  assert.equal(memRow.country, 'مصر');
+  assert.equal(memRow.countryCode, 'EG');
+  assert.equal(memRow.countryFlag, '🇪🇬');
+  assert.equal('ip' in memRow, false);
+
+  // Country change updates user's country cleanly
+  const syncRes = await handleEconomyAction(
+    env.economyCtx('mem_geo', 'syncUserCountry', {
+      country: 'الإمارات',
+      countryCode: 'AE',
+      countryFlag: '🇦🇪',
+      ip: '9.9.9.9',
+      coins: 99999,
+      role: 'owner',
+    })
+  );
+  assert.equal(syncRes.country, 'الإمارات');
+  assert.equal(syncRes.countryCode, 'AE');
+  assert.equal(syncRes.countryFlag, '🇦🇪');
+  memRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_geo' });
+  assert.equal(memRow.country, 'الإمارات');
+  assert.equal(memRow.countryCode, 'AE');
+  assert.equal(memRow.countryFlag, '🇦🇪');
+  assert.equal(memRow.coins, 50, 'syncUserCountry must never alter coins');
+  assert.equal(memRow.role, 'member', 'syncUserCountry must never alter role');
+  assert.equal('ip' in memRow, false);
+
+  // Guest profile creation + syncUserCountry cannot grant member perks or coins
+  await handleEconomyAction(
+    env.economyCtx('guest_geo', 'ensureProfile', {
+      guestProfile: { displayName: 'ضيف جغرافي', age: 23, gender: 'female', acceptedTerms: true },
+      detectedCountry: { country: 'الأردن', countryCode: 'JO', countryFlag: '🇯🇴' },
+    })
+  );
+  let guestRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'guest_geo' });
+  assert.equal(guestRow.role, 'guest');
+  assert.equal(guestRow.coins, 0);
+  assert.equal(guestRow.country, 'الأردن');
+
+  // Guest or member attempting to modify another user's country via targetUid/uid gets 403
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('guest_geo', 'syncUserCountry', {
+          targetUid: 'mem_geo',
+          country: 'المغرب',
+          countryCode: 'MA',
+          countryFlag: '🇲🇦',
+        })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+  await assert.rejects(
+    () =>
+      handleEconomyAction(
+        env.economyCtx('guest_geo', 'updateProfile', {
+          uid: 'mem_geo',
+          username: 'hacked',
+          displayName: 'Hacked',
+        })
+      ),
+    (err: unknown) => err instanceof HttpError && err.status === 403
+  );
+  memRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_geo' });
+  assert.equal(memRow.country, 'الإمارات', 'Target user country must remain untouched');
+});
+
+test('sortOnlineUsers matches by countryCode as well as country name while preserving gender ordering', () => {
+  const sample = [
+    { uid: 'unk_m', displayName: 'أحمد', country: '', countryCode: '', gender: 'male' as const, isOnline: true },
+    { uid: 'other_f', displayName: 'سارة', country: 'السعودية', countryCode: 'SA', gender: 'female' as const, isOnline: true },
+    { uid: 'same_m', displayName: 'كريم', country: 'Egypt', countryCode: 'EG', gender: 'male' as const, isOnline: true },
+    { uid: 'same_f', displayName: 'ليلى', country: 'مصر', countryCode: 'EG', gender: 'female' as const, isOnline: true },
+    { uid: 'other_m', displayName: 'فهد', country: 'السعودية', countryCode: 'SA', gender: 'male' as const, isOnline: true },
+  ] as unknown as UserProfile[];
+
+  const sorted = sortOnlineUsers(
+    sample,
+    { country: 'مصر', countryCode: 'EG' } as UserProfile,
+    (u) => Boolean(u.isOnline),
+    () => 0
+  ).map((u) => u.uid);
+
+  assert.deepEqual(sorted, ['same_f', 'same_m', 'other_f', 'other_m', 'unk_m']);
 });
 
 

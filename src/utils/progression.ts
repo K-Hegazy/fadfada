@@ -1,23 +1,37 @@
 import type { DailyTask, GenderType, SiteSettings, StoreItem, UserProfile, VipTier } from '../types/fadfada';
 
 export const COUNTRIES = [
-  { name: 'مصر', flag: '🇪🇬' },
-  { name: 'السعودية', flag: '🇸🇦' },
-  { name: 'الإمارات', flag: '🇦🇪' },
-  { name: 'الأردن', flag: '🇯🇴' },
-  { name: 'المغرب', flag: '🇲🇦' },
-  { name: 'تونس', flag: '🇹🇳' },
-  { name: 'الجزائر', flag: '🇩🇿' },
-  { name: 'العراق', flag: '🇮🇶' },
-  { name: 'الكويت', flag: '🇰🇼' },
-  { name: 'قطر', flag: '🇶🇦' },
-  { name: 'لبنان', flag: '🇱🇧' },
-  { name: 'فلسطين', flag: '🇵🇸' },
-  { name: 'سوريا', flag: '🇸🇾' },
-  { name: 'اليمن', flag: '🇾🇪' },
-  { name: 'السودان', flag: '🇸🇩' },
-  { name: 'أخرى', flag: '🌍' },
+  { code: 'EG', name: 'مصر', flag: '🇪🇬' },
+  { code: 'SA', name: 'السعودية', flag: '🇸🇦' },
+  { code: 'AE', name: 'الإمارات', flag: '🇦🇪' },
+  { code: 'JO', name: 'الأردن', flag: '🇯🇴' },
+  { code: 'MA', name: 'المغرب', flag: '🇲🇦' },
+  { code: 'TN', name: 'تونس', flag: '🇹🇳' },
+  { code: 'DZ', name: 'الجزائر', flag: '🇩🇿' },
+  { code: 'IQ', name: 'العراق', flag: '🇮🇶' },
+  { code: 'KW', name: 'الكويت', flag: '🇰🇼' },
+  { code: 'QA', name: 'قطر', flag: '🇶🇦' },
+  { code: 'LB', name: 'لبنان', flag: '🇱🇧' },
+  { code: 'PS', name: 'فلسطين', flag: '🇵🇸' },
+  { code: 'SY', name: 'سوريا', flag: '🇸🇾' },
+  { code: 'YE', name: 'اليمن', flag: '🇾🇪' },
+  { code: 'SD', name: 'السودان', flag: '🇸🇩' },
+  { code: '', name: 'أخرى', flag: '🌍' },
 ] as const;
+
+export function findCountryByNameOrCode(country?: string, countryCode?: string) {
+  const cleanCode = String(countryCode || '').trim().toUpperCase();
+  if (cleanCode) {
+    const byCode = COUNTRIES.find((c) => c.code === cleanCode);
+    if (byCode) return byCode;
+  }
+  const cleanName = String(country || '').trim();
+  if (cleanName) {
+    const byName = COUNTRIES.find((c) => c.name === cleanName);
+    if (byName) return byName;
+  }
+  return undefined;
+}
 
 export const CHAT_THEMES: Record<string, { label: string; bg: string; accent: string }> = {
   emerald: { label: 'زمردي هادئ', bg: 'bg-[#F7F7F5] dark:bg-[#0D1110]', accent: 'bg-[#0D7A5F]' },
@@ -266,11 +280,14 @@ export function sortOnlineUsers(
   getLastSeenFn: (u: UserProfile) => number
 ): UserProfile[] {
   const myCountry = isKnownCountry(currentUser?.country) ? String(currentUser?.country).trim() : '';
+  const myCode = String(currentUser?.countryCode || '').trim().toUpperCase();
 
   const getCountryGroupRank = (u: UserProfile): number => {
     const known = isKnownCountry(u.country);
-    if (!known) return 2; // Unknown country ALWAYS at the very end
-    if (myCountry && String(u.country).trim() === myCountry) return 0; // Same country first
+    const uCode = String(u.countryCode || '').trim().toUpperCase();
+    if (!known && !uCode) return 2; // Unknown country ALWAYS at the very end
+    if (myCode && uCode && uCode === myCode) return 0; // Same ISO country code first
+    if (myCountry && String(u.country).trim() === myCountry) return 0; // Same country name first
     return 1; // Other known countries next
   };
 

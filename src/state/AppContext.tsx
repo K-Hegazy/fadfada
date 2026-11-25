@@ -35,11 +35,18 @@ import {
   type PresenceSessionHandle,
 } from '../services/presence';
 import {
+  detectUserCountry,
+  getCachedDetectedCountry,
+  getLastSyncedUserCountry,
+  markUserCountrySynced,
+} from '../services/geolocation';
+import {
   deleteGuestAccount,
   ensureUserProfile,
   recordProfileVisit,
   subscribeToPublicUsers,
   subscribeToUserProfile,
+  syncUserCountry,
 } from '../services/profiles';
 import type {
   ActiveNavSection,
@@ -57,7 +64,7 @@ import type {
 } from '../types/fadfada';
 import { timestampToMillis } from '../utils/formatters';
 import { playNotificationChime } from '../utils/media';
-import { DEFAULT_SITE_SETTINGS, DEFAULT_STORE_ITEMS } from '../utils/progression';
+import { DEFAULT_SITE_SETTINGS, DEFAULT_STORE_ITEMS, isKnownCountry } from '../utils/progression';
 
 interface AppContextValue {
   authUser: AuthUser | null;
@@ -97,6 +104,7 @@ interface AppContextValue {
   toggleTheme: () => void;
   runtimeError: Error | null;
   clearRuntimeError: () => void;
+  countryDetectionFailed: boolean;
   loginWithGoogle: () => Promise<void>;
   loginWithEmail: (email: string, password: string) => Promise<void>;
   registerWithEmail: (
@@ -131,6 +139,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [marriages, setMarriages] = useState<Marriage[]>([]);
   const [presenceState, setPresenceState] = useState<PresenceConnectionState>('connecting');
   const [presenceClockMs, setPresenceClockMs] = useState(() => Date.now());
+  const [countryDetectionFailed, setCountryDetectionFailed] = useState(false);
   const [activeSection, setActiveSection] = useState<ActiveNavSection>('wall');
   const [activePeerId, setActivePeerId] = useState<string | null>(null);
   const [inspectedProfileUid, setInspectedProfileUid] = useState<string | null>(null);
@@ -146,11 +155,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const firstNotifBatchRef = useRef(true);
   const seededForUidRef = useRef<string | null>(null);
+  const countrySyncAttemptedForUidRef = useRef<string | null>(null);
   const soundEnabledRef = useRef(true);
   const pendingEnsureOptionsRef = useRef<{
     guestProfile?: GuestEntryInput;
     acceptedTerms?: boolean;
   } | null>(null);
+
+  // Detect user country via HTTPS IP geolocation once on first visit (cached, no GPS, no IP stored)
+  useEffect(() => {
+    let cancelled = false;
+    void detectUserCountry().then((detected) => {
+      if (!cancelled) {
+        setCountryDetectionFailed(detected === null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     soundEnabledRef.current = profile?.privacy?.soundNotifications !== false;
@@ -199,6 +222,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveSection('wall');
         seenNotifIdsRef.current.clear();
         firstNotifBatchRef.current = true;
+        countrySyncAttemptedForUidRef.current = null;
       }
     });
     return () => unsubscribe();
@@ -236,7 +260,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const pendingOpts = pendingEnsureOptionsRef.current ?? undefined;
         pendingEnsureOptionsRef.current = null;
-        await ensureUserProfile(authUser, pendingOpts);
+        const detectedCountry =
+          getCachedDetectedCountry() ?? (await detectUserCountry().catch(() => null));
+        if (!cancelled) {
+          setCountryDetectionFailed(detectedCountry === null);
+        }
+        await ensureUserProfile(authUser, {
+          ...pendingOpts,
+          ...(detectedCountry ? { detectedCountry } : {}),
+        });
       } catch (error) {
         if (!cancelled && error instanceof Error) setRuntimeError(error);
       }
@@ -321,6 +353,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       for (const unsub of unsubs) unsub();
     };
   }, [authReady, authUser]);
+
+  // Link detected country to the logged-in user profile (and update on country change without repeated requests)
+  useEffect(() => {
+    if (!authReady || !authUser?.uid || !profile || profile.uid !== authUser.uid) return;
+    if (countrySyncAttemptedForUidRef.current === authUser.uid) return;
+    countrySyncAttemptedForUidRef.current = authUser.uid;
+
+    let cancelled = false;
+    const syncDetectedCountry = async () => {
+      const detected =
+        getCachedDetectedCountry() ?? (await detectUserCountry().catch(() => null));
+      if (cancelled) return;
+      setCountryDetectionFailed(detected === null);
+      if (!detected) return;
+
+      const currentCode = String(profile.countryCode || '').trim().toUpperCase();
+      const currentCountry = String(profile.country || '').trim();
+      const lastSynced = getLastSyncedUserCountry(profile.uid);
+      const profileHasKnownCountry = isKnownCountry(currentCountry);
+
+      const alreadySyncedThisDetected = Boolean(
+        lastSynced &&
+          lastSynced.countryCode === detected.countryCode &&
+          lastSynced.country === detected.country
+      );
+
+      const exactProfileMatch =
+        currentCode === detected.countryCode && currentCountry === detected.country;
+
+      if (exactProfileMatch || (profileHasKnownCountry && alreadySyncedThisDetected)) {
+        if (!alreadySyncedThisDetected) {
+          markUserCountrySynced(profile.uid, detected);
+        }
+        return;
+      }
+
+      try {
+        await syncUserCountry(detected);
+        if (!cancelled) {
+          markUserCountrySynced(profile.uid, detected);
+        }
+      } catch {
+        // Non-blocking: user can still pick country manually in ProfilePanel
+      }
+    };
+
+    void syncDetectedCountry();
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, authUser?.uid, profile]);
 
   useEffect(() => {
     if (!authReady || !authUser?.uid) return;
@@ -522,6 +605,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toggleTheme,
     runtimeError,
     clearRuntimeError,
+    countryDetectionFailed,
     loginWithGoogle,
     loginWithEmail,
     registerWithEmail,
