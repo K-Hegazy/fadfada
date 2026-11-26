@@ -278,6 +278,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pendingEnsureOptionsRef.current = null;
         const detectedCountry =
           getCachedDetectedCountry() ?? (await detectUserCountry().catch(() => null));
+        console.info('[GeoSync] setupUserSession detectedCountry:', detectedCountry);
         if (!cancelled) {
           setCountryDetectionFailed(detectedCountry === null);
         }
@@ -285,10 +286,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ...pendingOpts,
           ...(detectedCountry ? { detectedCountry } : {}),
         });
+        console.info('[GeoSync] ensureUserProfile result:', ensuredProfile
+          ? {
+              uid: ensuredProfile.uid,
+              country: ensuredProfile.country,
+              countryCode: ensuredProfile.countryCode,
+              countryFlag: ensuredProfile.countryFlag,
+            }
+          : null);
         if (!cancelled && ensuredProfile) {
           setProfile((prev) => prev ?? ensuredProfile);
         }
       } catch (error) {
+        console.warn('[GeoSync] setupUserSession error:', error);
         if (!cancelled && error instanceof Error) setRuntimeError(error);
       }
 
@@ -390,6 +400,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const detected =
           getCachedDetectedCountry() ?? (await detectUserCountry().catch(() => null));
+        console.info('[GeoSync] syncDetectedCountry post-login check:', {
+          uid,
+          detected,
+          profileCountry,
+          profileCountryCode,
+        });
         if (cancelled) return;
         setCountryDetectionFailed(detected === null);
         if (!detected) return;
@@ -400,6 +416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const profileHasKnownCountry = isKnownCountry(currentCountry);
 
         if (countrySyncCompletedForKeyRef.current === syncKey && profileHasKnownCountry) {
+          console.info('[GeoSync] Already completed for key:', syncKey);
           return;
         }
 
@@ -418,10 +435,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             markUserCountrySynced(uid, detected);
           }
           countrySyncCompletedForKeyRef.current = syncKey;
+          console.info('[GeoSync] Profile already matches or previously synced:', {
+            exactProfileMatch,
+            alreadySyncedThisDetected,
+          });
           return;
         }
 
+        console.info('[GeoSync] Calling syncUserCountry:', detected);
         const updatedProfile = await syncUserCountry(detected);
+        console.info('[GeoSync] syncUserCountry Appwrite response:', updatedProfile
+          ? {
+              uid: updatedProfile.uid,
+              country: updatedProfile.country,
+              countryCode: updatedProfile.countryCode,
+              countryFlag: updatedProfile.countryFlag,
+            }
+          : null);
         markUserCountrySynced(uid, detected);
         countrySyncCompletedForKeyRef.current = syncKey;
         if (!cancelled && updatedProfile) {
@@ -430,7 +460,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             prev.map((u) => (u.uid === updatedProfile.uid ? updatedProfile : u))
           );
         }
-      } catch {
+      } catch (err) {
+        console.warn('[GeoSync] syncUserCountry failed:', err);
         // Non-blocking: user can still pick country manually in ProfilePanel
       } finally {
         if (countrySyncInFlightUidRef.current === uid) {

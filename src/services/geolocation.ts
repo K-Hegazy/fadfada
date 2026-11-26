@@ -203,11 +203,21 @@ async function fetchJsonWithTimeout(
       headers: { Accept: 'application/json' },
       ...(controller ? { signal: controller.signal } : {}),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.warn(`[Geo] Provider returned HTTP ${response.status}:`, url);
+      return null;
+    }
     const data = (await response.json()) as unknown;
-    if (!data || typeof data !== 'object') return null;
+    if (!data || typeof data !== 'object') {
+      console.warn('[Geo] Provider returned non-object payload:', url);
+      return null;
+    }
     return data as Record<string, unknown>;
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[Geo] Provider request failed (${err instanceof Error ? err.name : 'Error'}):`,
+      url
+    );
     return null;
   } finally {
     if (timer) clearTimeout(timer);
@@ -283,11 +293,20 @@ export async function detectUserCountry(options: {
 
   if (!forceRefresh) {
     const cached = getCachedDetectedCountry();
-    if (cached) return cached;
-    if (inFlightDetection) return inFlightDetection;
+    if (cached) {
+      console.info('[Geo] Using cached detected country:', cached);
+      return cached;
+    }
+    if (inFlightDetection) {
+      console.info('[Geo] Reusing in-flight detection promise');
+      return inFlightDetection;
+    }
   }
 
-  if (!fetchImpl) return null;
+  if (!fetchImpl) {
+    console.warn('[Geo] fetchImpl unavailable');
+    return null;
+  }
 
   const task = (async (): Promise<DetectedCountry | null> => {
     for (const provider of HTTPS_GEO_PROVIDERS) {
@@ -295,10 +314,13 @@ export async function detectUserCountry(options: {
       if (!payload) continue;
       const detected = provider.parse(payload);
       if (detected) {
+        console.info('[Geo] Detected country via', provider.url, detected);
         writeCachedDetectedCountry(detected);
         return detected;
       }
+      console.warn('[Geo] Provider payload rejected/unparseable:', provider.url);
     }
+    console.warn('[Geo] All HTTPS geolocation providers failed');
     return null;
   })();
 
