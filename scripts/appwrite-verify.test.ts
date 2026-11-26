@@ -40,6 +40,14 @@ import {
   sortOnlineUsers,
 } from '../src/utils/progression.js';
 import { sanitizeHttpUrl } from '../src/utils/formatters.js';
+import {
+  calculateUploadProgress,
+  isUploadAbortedError,
+  UploadAbortedError,
+  uploadFileWithProgress,
+  type UploadProgressInfo,
+  type XhrLike,
+} from '../src/services/storage.js';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -2117,7 +2125,321 @@ test('High-scale stress test: 10,000+ concurrent guests receive unique usernames
   assert.equal(env.db.get(TABLES.users)?.has('existing_mem_uid'), true);
 });
 
+test('chat media upload progress, chunking, cancellation, and error handling work with real XHR byte events', async () => {
+  // 1. Progress aggregation stays monotonic, byte-accurate, and caps at 99% until server ack
+  const p0 = calculateUploadProgress([0], 1000, 0, 1, false);
+  assert.deepEqual(p0, { loaded: 0, total: 1000, percent: 0, chunksUploaded: 0, chunksTotal: 1 });
 
+  const pMid = calculateUploadProgress([2_500_000, 1_500_000, 0], 12_000_000, 0, 3, false);
+  assert.equal(pMid.loaded, 4_000_000);
+  assert.equal(pMid.percent, 33);
 
+  const pBeforeAck = calculateUploadProgress([1000], 1000, 0, 1, false);
+  assert.equal(pBeforeAck.percent, 99);
 
+  const pDone = calculateUploadProgress([1000], 1000, 1, 1, true);
+  assert.equal(pDone.percent, 100);
+  assert.equal(pDone.loaded, 1000);
 
+  // 2. Single-chunk XHR byte progress (simulating image/voice upload < 5MB)
+  interface RecordedRequest {
+    url: string;
+    headers: Record<string, string>;
+    body: FormData | null;
+    aborted: boolean;
+    xhr: XhrLike;
+  }
+
+  const singleFile = new File([new Uint8Array(2048)], 'photo.webp', { type: 'image/webp' });
+  const singleEvents: UploadProgressInfo[] = [];
+  const singleRequests: RecordedRequest[] = [];
+
+  const singleRes = await uploadFileWithProgress({
+    endpoint: 'https://fra.cloud.appwrite.io/v1',
+    bucketId: 'fadfada_media',
+    fileId: 'file_single_1',
+    file: singleFile,
+    permissions: ['read("any")', 'delete("user:u1")'],
+    headers: { 'X-Appwrite-Project': 'proj1' },
+    chunkSize: 5 * 1024 * 1024,
+    onProgress: (info) => singleEvents.push(info),
+    createXhr: () => {
+      const headers: Record<string, string> = {};
+      const rec: RecordedRequest = {
+        url: '',
+        headers,
+        body: null,
+        aborted: false,
+        xhr: null as unknown as XhrLike,
+      };
+      const xhr: XhrLike = {
+        upload: { onprogress: null },
+        withCredentials: false,
+        status: 0,
+        responseText: '',
+        onload: null,
+        onerror: null,
+        onabort: null,
+        open: (_method, url) => {
+          rec.url = url;
+        },
+        setRequestHeader: (name, value) => {
+          headers[name.toLowerCase()] = value;
+        },
+        getResponseHeader: () => null,
+        send: (body) => {
+          rec.body = body instanceof FormData ? body : null;
+          queueMicrotask(() => {
+            xhr.upload.onprogress?.({ lengthComputable: true, loaded: 600, total: 2400 });
+            xhr.upload.onprogress?.({ lengthComputable: true, loaded: 1800, total: 2400 });
+            xhr.upload.onprogress?.({ lengthComputable: true, loaded: 2400, total: 2400 });
+            xhr.status = 201;
+            xhr.responseText = JSON.stringify({ $id: 'file_single_1' });
+            xhr.onload?.();
+          });
+        },
+        abort: () => {
+          rec.aborted = true;
+          xhr.onabort?.();
+        },
+      };
+      rec.xhr = xhr;
+      singleRequests.push(rec);
+      return xhr;
+    },
+  });
+
+  assert.equal(resId(singleRes), 'file_single_1');
+  assert.equal(singleRequests.length, 1);
+  assert.equal(singleRequests[0].xhr.withCredentials, true);
+  assert.equal(singleRequests[0].headers['content-range'], undefined);
+  assert.deepEqual(
+    singleEvents.map((e) => e.percent),
+    [0, 25, 75, 99, 99, 100]
+  );
+
+  // 3. Multi-chunk XHR upload (> 5MB, simulating video/large audio)
+  const chunkSize = 1024; // 1KB chunks in test to verify exact chunking protocol cleanly
+  const largeFile = new File([new Uint8Array(2560)], 'clip.mp4', { type: 'video/mp4' }); // 3 chunks: 1024 + 1024 + 512
+  const multiEvents: UploadProgressInfo[] = [];
+  const multiRequests: RecordedRequest[] = [];
+
+  const multiRes = await uploadFileWithProgress({
+    endpoint: 'https://fra.cloud.appwrite.io/v1/',
+    bucketId: 'fadfada_media',
+    fileId: 'file_multi_1',
+    file: largeFile,
+    permissions: ['read("any")'],
+    headers: { 'X-Appwrite-Project': 'proj1' },
+    chunkSize,
+    concurrency: 2,
+    onProgress: (info) => multiEvents.push(info),
+    createXhr: () => {
+      const headers: Record<string, string> = {};
+      const rec: RecordedRequest = {
+        url: '',
+        headers,
+        body: null,
+        aborted: false,
+        xhr: null as unknown as XhrLike,
+      };
+      const idx = multiRequests.length;
+      const xhr: XhrLike = {
+        upload: { onprogress: null },
+        withCredentials: false,
+        status: 0,
+        responseText: '',
+        onload: null,
+        onerror: null,
+        onabort: null,
+        open: (_method, url) => {
+          rec.url = url;
+        },
+        setRequestHeader: (name, value) => {
+          headers[name.toLowerCase()] = value;
+        },
+        getResponseHeader: () => null,
+        send: () => {
+          queueMicrotask(() => {
+            xhr.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 });
+            xhr.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 });
+            xhr.status = 201;
+            xhr.responseText = JSON.stringify({
+              $id: 'server_chunked_id',
+              chunksTotal: 3,
+              chunksUploaded: idx + 1,
+            });
+            xhr.onload?.();
+          });
+        },
+        abort: () => {
+          rec.aborted = true;
+          xhr.onabort?.();
+        },
+      };
+      rec.xhr = xhr;
+      multiRequests.push(rec);
+      return xhr;
+    },
+  });
+
+  assert.equal(resId(multiRes), 'server_chunked_id');
+  assert.equal(multiRequests.length, 3);
+  assert.equal(multiRequests[0].headers['content-range'], 'bytes 0-1023/2560');
+  assert.equal(multiRequests[1].headers['x-appwrite-id'], 'server_chunked_id');
+  assert.equal(multiRequests[1].headers['content-range'], 'bytes 1024-2047/2560');
+  assert.equal(multiRequests[2].headers['x-appwrite-id'], 'server_chunked_id');
+  assert.equal(multiRequests[2].headers['content-range'], 'bytes 2048-2559/2560');
+  assert.equal(multiEvents[0].percent, 0);
+  assert.equal(multiEvents[multiEvents.length - 1].percent, 100);
+  assert.equal(multiEvents.some((e) => e.percent > 0 && e.percent < 100), true);
+
+  // 4. Safe cancellation aborts in-flight XHR, prevents sending remaining chunks, and cleans partial file
+  const abortController = new AbortController();
+  const abortedRequests: RecordedRequest[] = [];
+  const cleanedPartialIds: string[] = [];
+
+  await assert.rejects(
+    async () => {
+      await uploadFileWithProgress({
+        endpoint: 'https://fra.cloud.appwrite.io/v1',
+        bucketId: 'fadfada_media',
+        fileId: 'file_abort_1',
+        file: largeFile,
+        permissions: ['read("any")'],
+        headers: { 'X-Appwrite-Project': 'proj1' },
+        chunkSize,
+        signal: abortController.signal,
+        onAbortPartialUpload: (id) => cleanedPartialIds.push(id),
+        createXhr: () => {
+          const headers: Record<string, string> = {};
+          const rec: RecordedRequest = {
+            url: '',
+            headers,
+            body: null,
+            aborted: false,
+            xhr: null as unknown as XhrLike,
+          };
+          const idx = abortedRequests.length;
+          const xhr: XhrLike = {
+            upload: { onprogress: null },
+            withCredentials: false,
+            status: 0,
+            responseText: '',
+            onload: null,
+            onerror: null,
+            onabort: null,
+            open: (_method, url) => {
+              rec.url = url;
+            },
+            setRequestHeader: (name, value) => {
+              headers[name.toLowerCase()] = value;
+            },
+            getResponseHeader: () => null,
+            send: () => {
+              if (idx === 0) {
+                queueMicrotask(() => {
+                  xhr.status = 201;
+                  xhr.responseText = JSON.stringify({
+                    $id: 'partial_upload_id',
+                    chunksTotal: 3,
+                    chunksUploaded: 1,
+                  });
+                  xhr.onload?.();
+                });
+              } else {
+                // Chunk 1 stays in-flight and gets cancelled by user
+                queueMicrotask(() => {
+                  abortController.abort();
+                });
+              }
+            },
+            abort: () => {
+              rec.aborted = true;
+              xhr.onabort?.();
+            },
+          };
+          rec.xhr = xhr;
+          abortedRequests.push(rec);
+          return xhr;
+        },
+      });
+    },
+    (err) => err instanceof UploadAbortedError && isUploadAbortedError(err)
+  );
+  assert.equal(abortedRequests.some((r) => r.aborted), true);
+  assert.deepEqual(cleanedPartialIds, ['partial_upload_id']);
+
+  // 5. Server HTTP error rejects cleanly without ever reporting 100%
+  const errEvents: UploadProgressInfo[] = [];
+  await assert.rejects(
+    async () => {
+      await uploadFileWithProgress({
+        endpoint: 'https://fra.cloud.appwrite.io/v1',
+        bucketId: 'fadfada_media',
+        fileId: 'file_err_1',
+        file: singleFile,
+        permissions: ['read("any")'],
+        headers: { 'X-Appwrite-Project': 'proj1' },
+        onProgress: (p) => errEvents.push(p),
+        createXhr: () => ({
+          upload: { onprogress: null },
+          withCredentials: false,
+          status: 0,
+          responseText: '',
+          onload: null,
+          onerror: null,
+          onabort: null,
+          open: () => {},
+          setRequestHeader: () => {},
+          getResponseHeader: () => null,
+          send() {
+            queueMicrotask(() => {
+              this.upload.onprogress?.({ lengthComputable: true, loaded: 1200, total: 2400 });
+              this.status = 400;
+              this.responseText = JSON.stringify({
+                message: 'File size exceeded',
+                type: 'storage_invalid_file_size',
+                code: 400,
+              });
+              this.onload?.();
+            });
+          },
+          abort: () => {},
+        }),
+      });
+    },
+    (err: Error & { type?: string }) => err.type === 'storage_invalid_file_size'
+  );
+  assert.equal(errEvents.some((e) => e.percent === 100), false);
+
+  // 6. Shared hook & progress UI wire all required statuses, cancel/retry, and duplicate lock across ChatPanel and RoomsView
+  const hookSource = fs.readFileSync(path.join(ROOT_DIR, 'src/hooks/useMediaUpload.ts'), 'utf8');
+  assert.match(hookSource, /uploadLockRef\.current/);
+  assert.match(hookSource, /uploadChatImage\(/);
+  assert.match(hookSource, /uploadChatVideo\(/);
+  assert.match(hookSource, /uploadChatVoice\(/);
+  assert.match(hookSource, /signal: controller\.signal/);
+
+  const barSource = fs.readFileSync(path.join(ROOT_DIR, 'src/components/MediaUploadProgressBar.tsx'), 'utf8');
+  assert.match(barSource, /جاري رفع الملف\.\.\./);
+  assert.match(barSource, /اكتمل الرفع، جاري إرسال الرسالة\.\.\./);
+  assert.match(barSource, /تم الإرسال بنجاح\./);
+  assert.match(barSource, /فشل الرفع، مع إمكانية إعادة المحاولة\./);
+  assert.match(barSource, /إلغاء الرفع/);
+  assert.match(barSource, /إعادة المحاولة/);
+
+  const chatPanelSource = fs.readFileSync(path.join(ROOT_DIR, 'src/components/ChatPanel.tsx'), 'utf8');
+  assert.match(chatPanelSource, /useMediaUpload\(/);
+  assert.match(chatPanelSource, /<MediaUploadProgressBar/);
+  assert.match(chatPanelSource, /isUploadLocked\(\)/);
+
+  const roomsViewSource = fs.readFileSync(path.join(ROOT_DIR, 'src/components/RoomsView.tsx'), 'utf8');
+  assert.match(roomsViewSource, /useMediaUpload\(/);
+  assert.match(roomsViewSource, /<MediaUploadProgressBar/);
+  assert.match(roomsViewSource, /isUploadLocked\(\)/);
+
+  function resId(res: { $id?: string }): string {
+    return String(res.$id ?? '');
+  }
+});

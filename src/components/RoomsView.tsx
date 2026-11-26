@@ -26,6 +26,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import { useMediaUpload } from '../hooks/useMediaUpload';
 import {
   consumeRoomViewOnce,
   createMemberRoom,
@@ -39,12 +40,12 @@ import {
   toggleRoomMessageReaction,
   updateRoomMeta,
 } from '../services/community';
-import { uploadChatImage, uploadChatVideo, uploadChatVoice } from '../services/storage';
 import { useApp } from '../state/AppContext';
 import type { Room, SimpleMessage } from '../types/fadfada';
 import { formatArabicTime, formatDurationMmSs } from '../utils/formatters';
 import { CHAT_THEMES, displayCountryName, sortOnlineUsers, VIP_LABELS } from '../utils/progression';
 import { Avatar } from './Avatar';
+import { MediaUploadProgressBar } from './MediaUploadProgressBar';
 import { MediaViewerModal } from './MediaViewerModal';
 import { EmptyState, FeedbackBanner, PageHeader } from './ui/Primitives';
 
@@ -116,6 +117,16 @@ export const RoomsView: React.FC = () => {
   const uidRef = useRef<string | null>(null);
   const roomsLoadedOnceRef = useRef(false);
   const wasActiveRoomPresentRef = useRef(false);
+
+  const {
+    uploadTask,
+    isMediaBusy,
+    isUploadLocked,
+    startUpload,
+    cancelUpload,
+    retryUpload,
+    dismissUpload,
+  } = useMediaUpload(activeRoomId);
 
   useEffect(() => {
     activeRoomIdRef.current = activeRoomId;
@@ -346,58 +357,68 @@ export const RoomsView: React.FC = () => {
     }
   };
 
-  const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImagePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !activeRoom) return;
-    setSending(true);
+    e.target.value = '';
+    if (!file || !activeRoom || isUploadLocked()) return;
+    const roomId = activeRoom.id;
+    const viewOnce = isViewOnceMode;
+    const dailyLimit = siteSettings.guestDailyMessageLimit;
     setSendError(null);
-    try {
-      const url = await uploadChatImage(`room_${activeRoom.id}`, profile.uid, file);
-      await sendRoomMessage(
-        activeRoom.id,
-        profile,
-        isViewOnceMode ? 'صورة للعرض مرة واحدة' : 'صورة مرفقة',
-        siteSettings.guestDailyMessageLimit,
-        {
-          type: 'image',
-          mediaUrl: url,
-          isViewOnce: isViewOnceMode,
-        }
-      );
-      setIsViewOnceMode(false);
-    } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'تعذر رفع الصورة.');
-    } finally {
-      setSending(false);
-      if (imageInputRef.current) imageInputRef.current.value = '';
-    }
+    startUpload({
+      kind: 'image',
+      scopeId: `room_${roomId}`,
+      uid: profile.uid,
+      fileName: file.name || 'صورة_مرفقة',
+      fileSize: file.size,
+      file,
+      sendMessage: async (mediaUrl) => {
+        await sendRoomMessage(
+          roomId,
+          profile,
+          viewOnce ? 'صورة للعرض مرة واحدة' : 'صورة مرفقة',
+          dailyLimit,
+          {
+            type: 'image',
+            mediaUrl,
+            isViewOnce: viewOnce,
+          }
+        );
+      },
+      onSuccess: () => setIsViewOnceMode(false),
+    });
   };
 
-  const handleVideoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVideoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !activeRoom) return;
-    setSending(true);
+    e.target.value = '';
+    if (!file || !activeRoom || isUploadLocked()) return;
+    const roomId = activeRoom.id;
+    const viewOnce = isViewOnceMode;
+    const dailyLimit = siteSettings.guestDailyMessageLimit;
     setSendError(null);
-    try {
-      const url = await uploadChatVideo(`room_${activeRoom.id}`, profile.uid, file);
-      await sendRoomMessage(
-        activeRoom.id,
-        profile,
-        isViewOnceMode ? 'فيديو للعرض مرة واحدة' : 'مقطع فيديو',
-        siteSettings.guestDailyMessageLimit,
-        {
-          type: 'video',
-          mediaUrl: url,
-          isViewOnce: isViewOnceMode,
-        }
-      );
-      setIsViewOnceMode(false);
-    } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'تعذر رفع الفيديو.');
-    } finally {
-      setSending(false);
-      if (videoInputRef.current) videoInputRef.current.value = '';
-    }
+    startUpload({
+      kind: 'video',
+      scopeId: `room_${roomId}`,
+      uid: profile.uid,
+      fileName: file.name || 'مقطع_فيديو',
+      fileSize: file.size,
+      file,
+      sendMessage: async (mediaUrl) => {
+        await sendRoomMessage(
+          roomId,
+          profile,
+          viewOnce ? 'فيديو للعرض مرة واحدة' : 'مقطع فيديو',
+          dailyLimit,
+          {
+            type: 'video',
+            mediaUrl,
+            isViewOnce: viewOnce,
+          }
+        );
+      },
+      onSuccess: () => setIsViewOnceMode(false),
+    });
   };
 
   const toggleVoiceRecording = async () => {
@@ -407,10 +428,15 @@ export const RoomsView: React.FC = () => {
       return;
     }
 
+    if (isUploadLocked()) return;
+
     if (!navigator.mediaDevices?.getUserMedia || !activeRoom) {
       setSendError('التسجيل الصوتي غير مدعوم في هذا المتصفح.');
       return;
     }
+
+    const roomId = activeRoom.id;
+    const dailyLimit = siteSettings.guestDailyMessageLimit;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -420,30 +446,33 @@ export const RoomsView: React.FC = () => {
       recorder.ondataavailable = (ev) => {
         if (ev.data.size > 0) chunksRef.current.push(ev.data);
       };
-      recorder.onstop = async () => {
+      recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         const elapsedSec = Math.max(1, Math.round((Date.now() - recordingStartRef.current) / 1000));
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        if (blob.size < 500) return;
-        setSending(true);
-        try {
-          const url = await uploadChatVoice(`room_${activeRoom.id}`, profile.uid, blob);
-          await sendRoomMessage(
-            activeRoom.id,
-            profile,
-            'رسالة صوتية',
-            siteSettings.guestDailyMessageLimit,
-            {
-              type: 'voice',
-              mediaUrl: url,
-              voiceDurationSec: elapsedSec,
-            }
-          );
-        } catch (err) {
-          setSendError(err instanceof Error ? err.message : 'تعذر رفع الرسالة الصوتية.');
-        } finally {
-          setSending(false);
-        }
+        if (blob.size < 500 || isUploadLocked()) return;
+        setSendError(null);
+        startUpload({
+          kind: 'audio',
+          scopeId: `room_${roomId}`,
+          uid: profile.uid,
+          fileName: `رسالة_صوتية_${formatDurationMmSs(elapsedSec)}`,
+          fileSize: blob.size,
+          blob,
+          sendMessage: async (mediaUrl) => {
+            await sendRoomMessage(
+              roomId,
+              profile,
+              'رسالة صوتية',
+              dailyLimit,
+              {
+                type: 'voice',
+                mediaUrl,
+                voiceDurationSec: elapsedSec,
+              }
+            );
+          },
+        });
       };
       recorder.start();
       recorderRef.current = recorder;
@@ -912,11 +941,19 @@ export const RoomsView: React.FC = () => {
                   </div>
                 )}
 
+                <MediaUploadProgressBar
+                  task={uploadTask}
+                  onCancel={cancelUpload}
+                  onRetry={retryUpload}
+                  onDismiss={dismissUpload}
+                />
+
                 <div className="flex items-center gap-1 overflow-x-auto fadfada-scroll text-[11px]">
                   <button
                     type="button"
+                    disabled={isMediaBusy}
                     onClick={() => imageInputRef.current?.click()}
-                    className="min-h-[28px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] whitespace-nowrap shrink-0"
+                    className="min-h-[28px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
                   >
                     <ImageIcon className="w-3.5 h-3.5" />
                     <span>صورة</span>
@@ -925,14 +962,16 @@ export const RoomsView: React.FC = () => {
                     ref={imageInputRef}
                     type="file"
                     accept="image/*"
+                    disabled={isMediaBusy}
                     onChange={handleImagePick}
                     className="hidden"
                   />
 
                   <button
                     type="button"
+                    disabled={isMediaBusy}
                     onClick={() => videoInputRef.current?.click()}
-                    className="min-h-[28px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] whitespace-nowrap shrink-0"
+                    className="min-h-[28px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
                   >
                     <Video className="w-3.5 h-3.5" />
                     <span>فيديو</span>
@@ -941,6 +980,7 @@ export const RoomsView: React.FC = () => {
                     ref={videoInputRef}
                     type="file"
                     accept="video/mp4,video/webm,video/quicktime"
+                    disabled={isMediaBusy}
                     onChange={handleVideoPick}
                     className="hidden"
                   />
@@ -960,8 +1000,9 @@ export const RoomsView: React.FC = () => {
 
                   <button
                     type="button"
+                    disabled={isMediaBusy && !recording}
                     onClick={() => void toggleVoiceRecording()}
-                    className={`min-h-[28px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 ${
+                    className={`min-h-[28px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 ${
                       recording
                         ? 'bg-rose-600 text-white animate-pulse'
                         : 'bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37]'

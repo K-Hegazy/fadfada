@@ -27,6 +27,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import { useMediaUpload } from '../hooks/useMediaUpload';
 import { sendGiftToUser } from '../services/economy';
 import {
   clearConversationForUser,
@@ -44,7 +45,6 @@ import {
   toggleArchiveConversation,
   toggleMessageReaction,
 } from '../services/messaging';
-import { uploadChatImage, uploadChatVideo, uploadChatVoice } from '../services/storage';
 import { useApp } from '../state/AppContext';
 import { SCHEMA_LIMITS, type Message } from '../types/fadfada';
 import {
@@ -55,6 +55,7 @@ import {
 } from '../utils/formatters';
 import { CHAT_THEMES, sortOnlineUsers } from '../utils/progression';
 import { Avatar } from './Avatar';
+import { MediaUploadProgressBar } from './MediaUploadProgressBar';
 import { MediaViewerModal } from './MediaViewerModal';
 import { EmptyState, SectionSkeleton } from './ui/Primitives';
 import emptyChatArt from '../assets/images/fadfada_empty_chat_1795297623140.jpg';
@@ -141,6 +142,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const peer = effectivePeerId ? usersById[effectivePeerId] : undefined;
   const conversationId =
     authUser && effectivePeerId ? getConversationId(authUser.uid, effectivePeerId) : null;
+
+  const {
+    uploadTask,
+    isMediaBusy,
+    isUploadLocked,
+    startUpload,
+    cancelUpload: handleCancelUpload,
+    retryUpload: handleRetryUpload,
+    dismissUpload: handleDismissUpload,
+  } = useMediaUpload(conversationId);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === conversationId) ?? null,
@@ -390,60 +401,76 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   };
 
-  const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImagePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !conversationId) return;
-    setSending(true);
+    e.target.value = '';
+    if (!file || !conversationId || isUploadLocked()) return;
+    const convId = conversationId;
+    const peerId = effectivePeerId;
+    const senderUid = authUser.uid;
+    const viewOnce = isViewOnceMode;
+    const disappear = disappearSeconds;
+    const ctx = sendOptionsContext;
     setSendError(null);
-    try {
-      const url = await uploadChatImage(conversationId, authUser.uid, file);
-      await sendPrivateMessage(
-        authUser.uid,
-        effectivePeerId,
-        isViewOnceMode ? 'صورة للعرض مرة واحدة' : 'صورة مرفقة',
-        {
-          ...sendOptionsContext,
-          type: 'image',
-          mediaUrl: url,
-          disappearSeconds,
-          isViewOnce: isViewOnceMode,
-        }
-      );
-      setIsViewOnceMode(false);
-    } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'تعذر رفع الصورة.');
-    } finally {
-      setSending(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+    startUpload({
+      kind: 'image',
+      scopeId: convId,
+      uid: senderUid,
+      fileName: file.name || 'صورة_مرفقة',
+      fileSize: file.size,
+      file,
+      sendMessage: async (mediaUrl) => {
+        await sendPrivateMessage(
+          senderUid,
+          peerId,
+          viewOnce ? 'صورة للعرض مرة واحدة' : 'صورة مرفقة',
+          {
+            ...ctx,
+            type: 'image',
+            mediaUrl,
+            disappearSeconds: disappear,
+            isViewOnce: viewOnce,
+          }
+        );
+      },
+      onSuccess: () => setIsViewOnceMode(false),
+    });
   };
 
-  const handleVideoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVideoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !conversationId) return;
-    setSending(true);
+    e.target.value = '';
+    if (!file || !conversationId || isUploadLocked()) return;
+    const convId = conversationId;
+    const peerId = effectivePeerId;
+    const senderUid = authUser.uid;
+    const viewOnce = isViewOnceMode;
+    const disappear = disappearSeconds;
+    const ctx = sendOptionsContext;
     setSendError(null);
-    try {
-      const url = await uploadChatVideo(conversationId, authUser.uid, file);
-      await sendPrivateMessage(
-        authUser.uid,
-        effectivePeerId,
-        isViewOnceMode ? 'فيديو للعرض مرة واحدة' : 'مقطع فيديو',
-        {
-          ...sendOptionsContext,
-          type: 'video',
-          mediaUrl: url,
-          disappearSeconds,
-          isViewOnce: isViewOnceMode,
-        }
-      );
-      setIsViewOnceMode(false);
-    } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'تعذر رفع الفيديو.');
-    } finally {
-      setSending(false);
-      if (videoInputRef.current) videoInputRef.current.value = '';
-    }
+    startUpload({
+      kind: 'video',
+      scopeId: convId,
+      uid: senderUid,
+      fileName: file.name || 'مقطع_فيديو',
+      fileSize: file.size,
+      file,
+      sendMessage: async (mediaUrl) => {
+        await sendPrivateMessage(
+          senderUid,
+          peerId,
+          viewOnce ? 'فيديو للعرض مرة واحدة' : 'مقطع فيديو',
+          {
+            ...ctx,
+            type: 'video',
+            mediaUrl,
+            disappearSeconds: disappear,
+            isViewOnce: viewOnce,
+          }
+        );
+      },
+      onSuccess: () => setIsViewOnceMode(false),
+    });
   };
 
   const toggleVoiceRecording = async () => {
@@ -453,10 +480,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       return;
     }
 
+    if (isUploadLocked()) return;
+
     if (!navigator.mediaDevices?.getUserMedia || !conversationId) {
       setSendError('التسجيل الصوتي غير مدعوم في هذا المتصفح.');
       return;
     }
+
+    const convId = conversationId;
+    const peerId = effectivePeerId;
+    const senderUid = authUser.uid;
+    const disappear = disappearSeconds;
+    const ctx = sendOptionsContext;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -466,25 +501,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       recorder.ondataavailable = (ev) => {
         if (ev.data.size > 0) chunksRef.current.push(ev.data);
       };
-      recorder.onstop = async () => {
+      recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         const elapsedSec = Math.max(1, Math.round((Date.now() - recordingStartRef.current) / 1000));
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        if (blob.size < 500) return;
-        setSending(true);
-        try {
-          const url = await uploadChatVoice(conversationId, authUser.uid, blob);
-          await sendPrivateMessage(authUser.uid, effectivePeerId, 'رسالة صوتية', {
-            ...sendOptionsContext,
-            type: 'voice',
-            mediaUrl: url,
-            voiceDurationSec: elapsedSec,
-          });
-        } catch (err) {
-          setSendError(err instanceof Error ? err.message : 'تعذر رفع الرسالة الصوتية.');
-        } finally {
-          setSending(false);
-        }
+        if (blob.size < 500 || isUploadLocked()) return;
+        setSendError(null);
+        startUpload({
+          kind: 'audio',
+          scopeId: convId,
+          uid: senderUid,
+          fileName: `رسالة_صوتية_${formatDurationMmSs(elapsedSec)}`,
+          fileSize: blob.size,
+          blob,
+          sendMessage: async (mediaUrl) => {
+            await sendPrivateMessage(senderUid, peerId, 'رسالة صوتية', {
+              ...ctx,
+              type: 'voice',
+              mediaUrl,
+              voiceDurationSec: elapsedSec,
+              disappearSeconds: disappear,
+            });
+          },
+        });
       };
       recorder.start();
       recorderRef.current = recorder;
@@ -1109,13 +1148,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </p>
         )}
 
+        <MediaUploadProgressBar
+          task={uploadTask}
+          onCancel={handleCancelUpload}
+          onRetry={handleRetryUpload}
+          onDismiss={handleDismissUpload}
+        />
+
         {sendError && <p className="mb-1.5 text-xs text-rose-600 dark:text-rose-400">{sendError}</p>}
 
         <div className="mb-1.5 flex items-center gap-1 overflow-x-auto fadfada-scroll text-[11px]">
           <button
             type="button"
+            disabled={isMediaBusy}
             onClick={() => fileInputRef.current?.click()}
-            className="min-h-[30px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] whitespace-nowrap shrink-0"
+            className="min-h-[30px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
           >
             <ImageIcon className="w-3.5 h-3.5" />
             <span>صورة</span>
@@ -1124,14 +1171,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             ref={fileInputRef}
             type="file"
             accept="image/*"
+            disabled={isMediaBusy}
             onChange={handleImagePick}
             className="hidden"
           />
 
           <button
             type="button"
+            disabled={isMediaBusy}
             onClick={() => videoInputRef.current?.click()}
-            className="min-h-[30px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] whitespace-nowrap shrink-0"
+            className="min-h-[30px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
           >
             <Video className="w-3.5 h-3.5" />
             <span>فيديو</span>
@@ -1140,6 +1189,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             ref={videoInputRef}
             type="file"
             accept="video/mp4,video/webm,video/quicktime"
+            disabled={isMediaBusy}
             onChange={handleVideoPick}
             className="hidden"
           />
@@ -1160,8 +1210,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
           <button
             type="button"
+            disabled={isMediaBusy && !recording}
             onClick={() => void toggleVoiceRecording()}
-            className={`min-h-[30px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`min-h-[30px] px-2.5 rounded-md inline-flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 ${
               recording
                 ? 'bg-rose-600 text-white animate-pulse'
                 : 'bg-[#F2F4F7] dark:bg-[#18242B] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-[#1F2E37]'
