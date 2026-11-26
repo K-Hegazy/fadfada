@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Allow: /fadfada/
+Disallow: /fadfada/admin
+Disallow: /fadfada/chats
+Disallow: /fadfada/settings
+Disallow: /fadfada/social
+Disallow: /fadfada/?/
+
+Sitemap: https://k-hegazy.github.io/fadfada/sitemap.xml

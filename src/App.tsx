@@ -70,6 +70,21 @@ const FadfadaShell: React.FC = () => {
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
   useEffect(() => {
+    const robotsMeta = document.querySelector('meta[name="robots"]');
+    if (!robotsMeta) return;
+    const params = new URLSearchParams(window.location.search);
+    const hasAuthActionQuery =
+      params.has('recovery') || params.has('verify') || params.has('auth_error');
+    const shouldNoIndex = Boolean(authUser) || hasAuthActionQuery;
+    robotsMeta.setAttribute(
+      'content',
+      shouldNoIndex
+        ? 'noindex, nofollow'
+        : 'index, follow, max-image-preview:large, max-snippet:-1'
+    );
+  }, [authUser]);
+
+  useEffect(() => {
     if (!toastNotification) return;
     const t = window.setTimeout(() => dismissToast(), 5000);
     return () => window.clearTimeout(t);

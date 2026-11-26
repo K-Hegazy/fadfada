@@ -2443,3 +2443,62 @@ test('chat media upload progress, chunking, cancellation, and error handling wor
     return String(res.$id ?? '');
   }
 });
+
+test('SEO metadata, canonical, robots.txt, sitemap.xml, Schema.org, and private noindex guards are configured for /fadfada/', () => {
+  const canonicalUrl = 'https://k-hegazy.github.io/fadfada/';
+  const indexHtml = fs.readFileSync(path.join(ROOT_DIR, 'index.html'), 'utf8');
+  const metadataJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'metadata.json'), 'utf8')) as {
+    name: string;
+    description: string;
+  };
+  const robotsTxt = fs.readFileSync(path.join(ROOT_DIR, 'public/robots.txt'), 'utf8');
+  const sitemapXml = fs.readFileSync(path.join(ROOT_DIR, 'public/sitemap.xml'), 'utf8');
+  const page404Html = fs.readFileSync(path.join(ROOT_DIR, 'public/404.html'), 'utf8');
+  const appSource = fs.readFileSync(path.join(ROOT_DIR, 'src/App.tsx'), 'utf8');
+  const authScreenSource = fs.readFileSync(path.join(ROOT_DIR, 'src/components/AuthScreen.tsx'), 'utf8');
+
+  assert.match(indexHtml, /<title>فضفضة - شات فضفضة ودردشة عربية فورية<\/title>/);
+  const descMatch = indexHtml.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
+  assert.ok(descMatch?.[1], 'index.html must include meta description');
+  const desc = descMatch[1];
+  assert.ok(desc.length >= 110 && desc.length <= 165, `Description length out of target range: ${desc.length}`);
+  assert.match(desc, /فضفضة/);
+  assert.match(desc, /شات فضفضة/);
+  assert.match(desc, /دردشة عربية/);
+  assert.equal(metadataJson.description, desc);
+
+  assert.match(indexHtml, /<link\s+rel="canonical"\s+href="https:\/\/k-hegazy\.github\.io\/fadfada\/"\s*\/>/);
+  assert.match(indexHtml, /<meta\s+name="robots"\s+content="index,\s*follow[^"]*"\s*\/>/);
+  assert.match(indexHtml, /<meta\s+property="og:url"\s+content="https:\/\/k-hegazy\.github\.io\/fadfada\/"\s*\/>/);
+  assert.match(indexHtml, /<meta\s+property="og:image"\s+content="https:\/\/k-hegazy\.github\.io\/fadfada\/og-cover\.jpg"\s*\/>/);
+  assert.match(indexHtml, /<meta\s+name="twitter:image"\s+content="https:\/\/k-hegazy\.github\.io\/fadfada\/og-cover\.jpg"\s*\/>/);
+  assert.equal(fs.existsSync(path.join(ROOT_DIR, 'public/og-cover.jpg')), true);
+  assert.ok(fs.statSync(path.join(ROOT_DIR, 'public/og-cover.jpg')).size > 10_000);
+
+  const ldMatch = indexHtml.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  assert.ok(ldMatch?.[1], 'index.html must embed Schema.org JSON-LD');
+  const jsonLd = JSON.parse(ldMatch[1]) as { '@graph': Array<{ '@type': string; url?: string }> };
+  const graphTypes = jsonLd['@graph'].map((n) => n['@type']);
+  assert.ok(graphTypes.includes('WebSite'));
+  assert.ok(graphTypes.includes('WebApplication'));
+  assert.equal(jsonLd['@graph'].every((n) => n.url === canonicalUrl), true);
+
+  assert.match(indexHtml, /<noscript>/);
+  assert.match(indexHtml, /شات فضفضة/);
+  assert.match(authScreenSource, /شات فضفضة ودردشة عربية فورية/);
+
+  assert.match(robotsTxt, /Allow:\s*\/fadfada\//);
+  assert.match(robotsTxt, /Disallow:\s*\/fadfada\/chats/);
+  assert.match(robotsTxt, /Disallow:\s*\/fadfada\/settings/);
+  assert.match(robotsTxt, /Disallow:\s*\/fadfada\/admin/);
+  assert.match(robotsTxt, /Sitemap:\s*https:\/\/k-hegazy\.github\.io\/fadfada\/sitemap\.xml/);
+
+  assert.match(sitemapXml, /<loc>https:\/\/k-hegazy\.github\.io\/fadfada\/<\/loc>/);
+  assert.equal((sitemapXml.match(/<loc>/g) ?? []).length, 1);
+
+  assert.match(page404Html, /<meta\s+name="robots"\s+content="noindex,\s*nofollow"\s*\/>/);
+  assert.match(page404Html, /var basePath = "\/";/);
+
+  assert.match(appSource, /'noindex, nofollow'/);
+});
+

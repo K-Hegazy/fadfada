@@ -250,7 +250,7 @@ export const AuthScreen: React.FC = () => {
                 فضفضة
               </span>
               <span className="hidden sm:inline text-[11px] text-slate-500 dark:text-slate-400">
-                مجتمع الشات والتواصل العربي الفوري
+                شات فضفضة ودردشة عربية فورية
               </span>
             </div>
           </div>
@@ -272,10 +272,10 @@ export const AuthScreen: React.FC = () => {
           <div className="lg:col-span-7 p-5 sm:p-7 flex flex-col justify-center">
             <div className="mb-4">
               <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-50">
-                ادخل إلى دردشة ومجتمع فضفضة
+                فضفضة — شات فضفضة ودردشة عربية فورية
               </h1>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                انضم لغرف الدردشة الفورية، تصفح المتواجدين الآن، أو شارك على الحائط مباشرة.
+                منصة دردشة عربية تجمع غرف الشات النشطة، المراسلة الخاصة بالصوت والفيديو، والحائط التفاعلي — ادخل بحسابك أو كضيف في ثوانٍ.
               </p>
             </div>
 
