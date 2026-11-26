@@ -157,12 +157,17 @@ export async function ensureUserProfile(
     acceptedTerms?: boolean;
     detectedCountry?: { country: string; countryCode: string; countryFlag: string } | null;
   }
-): Promise<void> {
-  await executeAppwriteFunction(APPWRITE_CONFIG.economyFunctionId, 'ensureProfile', {
-    ...(options?.guestProfile ? { guestProfile: options.guestProfile } : {}),
-    ...(options?.acceptedTerms !== undefined ? { acceptedTerms: options.acceptedTerms } : {}),
-    ...(options?.detectedCountry ? { detectedCountry: options.detectedCountry } : {}),
-  });
+): Promise<UserProfile | null> {
+  const row = await executeAppwriteFunction<AppwriteRow>(
+    APPWRITE_CONFIG.economyFunctionId,
+    'ensureProfile',
+    {
+      ...(options?.guestProfile ? { guestProfile: options.guestProfile } : {}),
+      ...(options?.acceptedTerms !== undefined ? { acceptedTerms: options.acceptedTerms } : {}),
+      ...(options?.detectedCountry ? { detectedCountry: options.detectedCountry } : {}),
+    }
+  );
+  return row && (row.uid || row.$id) ? mapUserRow(row) : null;
 }
 
 export interface ProfileUpdateInput {
@@ -207,38 +212,51 @@ export function validateProfileInput(input: ProfileUpdateInput): string | null {
   return null;
 }
 
-export async function updateUserProfile(_uid: string, input: ProfileUpdateInput): Promise<void> {
+export async function updateUserProfile(
+  _uid: string,
+  input: ProfileUpdateInput
+): Promise<UserProfile | null> {
   const validationError = validateProfileInput(input);
   if (validationError) throw new Error(validationError);
 
-  await executeAppwriteFunction(APPWRITE_CONFIG.economyFunctionId, 'updateProfile', {
-    username: input.username.trim().toLowerCase(),
-    displayName: input.displayName.trim(),
-    avatar: input.avatar.trim().slice(0, 500),
-    cover: input.cover.trim().slice(0, 500),
-    bio: input.bio.trim(),
-    gender: input.gender,
-    age: Math.floor(input.age),
-    country: input.country.trim().slice(0, 60),
-    countryCode: String(input.countryCode || '').trim().toUpperCase().slice(0, 8),
-    countryFlag: input.countryFlag.trim().slice(0, 16),
-    maritalStatus: input.maritalStatus,
-    affiliation: input.affiliation.trim().slice(0, 60),
-  });
+  const row = await executeAppwriteFunction<AppwriteRow>(
+    APPWRITE_CONFIG.economyFunctionId,
+    'updateProfile',
+    {
+      username: input.username.trim().toLowerCase(),
+      displayName: input.displayName.trim(),
+      avatar: input.avatar.trim().slice(0, 500),
+      cover: input.cover.trim().slice(0, 500),
+      bio: input.bio.trim(),
+      gender: input.gender,
+      age: Math.floor(input.age),
+      country: input.country.trim().slice(0, 60),
+      countryCode: String(input.countryCode || '').trim().toUpperCase().slice(0, 8),
+      countryFlag: input.countryFlag.trim().slice(0, 16),
+      maritalStatus: input.maritalStatus,
+      affiliation: input.affiliation.trim().slice(0, 60),
+    }
+  );
+  return row && (row.uid || row.$id) ? mapUserRow(row) : null;
 }
 
 export async function syncUserCountry(input: {
   country: string;
   countryCode: string;
   countryFlag: string;
-}): Promise<void> {
+}): Promise<UserProfile | null> {
   const cleanCountry = input.country.trim().slice(0, 60);
-  if (!cleanCountry) return;
-  await executeAppwriteFunction(APPWRITE_CONFIG.economyFunctionId, 'syncUserCountry', {
-    country: cleanCountry,
-    countryCode: input.countryCode.trim().toUpperCase().slice(0, 8),
-    countryFlag: input.countryFlag.trim().slice(0, 16),
-  });
+  if (!cleanCountry) return null;
+  const row = await executeAppwriteFunction<AppwriteRow>(
+    APPWRITE_CONFIG.economyFunctionId,
+    'syncUserCountry',
+    {
+      country: cleanCountry,
+      countryCode: input.countryCode.trim().toUpperCase().slice(0, 8),
+      countryFlag: input.countryFlag.trim().slice(0, 16),
+    }
+  );
+  return row && (row.uid || row.$id) ? mapUserRow(row) : null;
 }
 
 export async function updateUserPrivacy(

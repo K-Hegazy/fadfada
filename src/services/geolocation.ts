@@ -19,7 +19,7 @@ interface StoredUserGeoSync {
 const GEO_CACHE_KEY = 'fadfada_geo_country_v1';
 const USER_GEO_SYNC_PREFIX = 'fadfada_user_geo_sync_v1_';
 export const GEO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const DEFAULT_TIMEOUT_MS = 4_500;
+const DEFAULT_TIMEOUT_MS = 3_500;
 
 let memoryCache: CachedDetectedCountry | null = null;
 let inFlightDetection: Promise<DetectedCountry | null> | null = null;
@@ -242,17 +242,27 @@ const HTTPS_GEO_PROVIDERS: GeoProvider[] = [
     },
   },
   {
-    // Fallback 1: ipapi.co HTTPS JSON endpoint
+    // Fallback 1: api.country.is lightweight HTTPS endpoint (fast, CORS *)
+    url: 'https://api.country.is/',
+    parse: (data) => buildDetectedCountry(data.country, ''),
+  },
+  {
+    // Fallback 2: GeoJS HTTPS endpoint (CORS *)
+    url: 'https://get.geojs.io/v1/ip/country.json',
+    parse: (data) => buildDetectedCountry(data.country, data.name),
+  },
+  {
+    // Fallback 3: ipinfo.io HTTPS endpoint (CORS *)
+    url: 'https://ipinfo.io/json',
+    parse: (data) => buildDetectedCountry(data.country, ''),
+  },
+  {
+    // Fallback 4: ipapi.co HTTPS JSON endpoint
     url: 'https://ipapi.co/json/',
     parse: (data) => {
       if (data.error) return null;
       return buildDetectedCountry(data.country_code ?? data.country, data.country_name);
     },
-  },
-  {
-    // Fallback 2: api.country.is lightweight HTTPS endpoint
-    url: 'https://api.country.is/',
-    parse: (data) => buildDetectedCountry(data.country, ''),
   },
 ];
 

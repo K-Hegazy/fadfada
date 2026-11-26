@@ -155,7 +155,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const firstNotifBatchRef = useRef(true);
   const seededForUidRef = useRef<string | null>(null);
-  const countrySyncAttemptedForUidRef = useRef<string | null>(null);
+  const countrySyncInFlightUidRef = useRef<string | null>(null);
+  const countrySyncCompletedForKeyRef = useRef<string | null>(null);
+  const [geoDetectionTick, setGeoDetectionTick] = useState(0);
   const soundEnabledRef = useRef(true);
   const pendingEnsureOptionsRef = useRef<{
     guestProfile?: GuestEntryInput;
@@ -165,13 +167,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Detect user country via HTTPS IP geolocation once on first visit (cached, no GPS, no IP stored)
   useEffect(() => {
     let cancelled = false;
-    void detectUserCountry().then((detected) => {
-      if (!cancelled) {
+    const runDetect = () => {
+      void detectUserCountry().then((detected) => {
+        if (cancelled) return;
         setCountryDetectionFailed(detected === null);
+        if (detected) {
+          setGeoDetectionTick((n) => n + 1);
+        }
+      });
+    };
+    runDetect();
+
+    const handleOnline = () => {
+      if (!getCachedDetectedCountry()) {
+        runDetect();
       }
-    });
+    };
+    window.addEventListener('online', handleOnline);
     return () => {
       cancelled = true;
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
 
@@ -222,7 +237,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveSection('wall');
         seenNotifIdsRef.current.clear();
         firstNotifBatchRef.current = true;
-        countrySyncAttemptedForUidRef.current = null;
+        countrySyncInFlightUidRef.current = null;
+        countrySyncCompletedForKeyRef.current = null;
       }
     });
     return () => unsubscribe();
@@ -265,10 +281,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!cancelled) {
           setCountryDetectionFailed(detectedCountry === null);
         }
-        await ensureUserProfile(authUser, {
+        const ensuredProfile = await ensureUserProfile(authUser, {
           ...pendingOpts,
           ...(detectedCountry ? { detectedCountry } : {}),
         });
+        if (!cancelled && ensuredProfile) {
+          setProfile((prev) => prev ?? ensuredProfile);
+        }
       } catch (error) {
         if (!cancelled && error instanceof Error) setRuntimeError(error);
       }
@@ -354,48 +373,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [authReady, authUser]);
 
+  const profileUid = profile?.uid ?? '';
+  const profileCountry = profile?.country ?? '';
+  const profileCountryCode = profile?.countryCode ?? '';
+
   // Link detected country to the logged-in user profile (and update on country change without repeated requests)
   useEffect(() => {
-    if (!authReady || !authUser?.uid || !profile || profile.uid !== authUser.uid) return;
-    if (countrySyncAttemptedForUidRef.current === authUser.uid) return;
-    countrySyncAttemptedForUidRef.current = authUser.uid;
+    const uid = authUser?.uid;
+    if (!authReady || !uid || !profileUid || profileUid !== uid) return;
+    if (countrySyncInFlightUidRef.current === uid) return;
 
     let cancelled = false;
+    countrySyncInFlightUidRef.current = uid;
+
     const syncDetectedCountry = async () => {
-      const detected =
-        getCachedDetectedCountry() ?? (await detectUserCountry().catch(() => null));
-      if (cancelled) return;
-      setCountryDetectionFailed(detected === null);
-      if (!detected) return;
-
-      const currentCode = String(profile.countryCode || '').trim().toUpperCase();
-      const currentCountry = String(profile.country || '').trim();
-      const lastSynced = getLastSyncedUserCountry(profile.uid);
-      const profileHasKnownCountry = isKnownCountry(currentCountry);
-
-      const alreadySyncedThisDetected = Boolean(
-        lastSynced &&
-          lastSynced.countryCode === detected.countryCode &&
-          lastSynced.country === detected.country
-      );
-
-      const exactProfileMatch =
-        currentCode === detected.countryCode && currentCountry === detected.country;
-
-      if (exactProfileMatch || (profileHasKnownCountry && alreadySyncedThisDetected)) {
-        if (!alreadySyncedThisDetected) {
-          markUserCountrySynced(profile.uid, detected);
-        }
-        return;
-      }
-
       try {
-        await syncUserCountry(detected);
-        if (!cancelled) {
-          markUserCountrySynced(profile.uid, detected);
+        const detected =
+          getCachedDetectedCountry() ?? (await detectUserCountry().catch(() => null));
+        if (cancelled) return;
+        setCountryDetectionFailed(detected === null);
+        if (!detected) return;
+
+        const syncKey = `${uid}:${detected.countryCode}:${detected.country}`;
+        const currentCode = profileCountryCode.trim().toUpperCase();
+        const currentCountry = profileCountry.trim();
+        const profileHasKnownCountry = isKnownCountry(currentCountry);
+
+        if (countrySyncCompletedForKeyRef.current === syncKey && profileHasKnownCountry) {
+          return;
+        }
+
+        const lastSynced = getLastSyncedUserCountry(uid);
+        const alreadySyncedThisDetected = Boolean(
+          lastSynced &&
+            lastSynced.countryCode === detected.countryCode &&
+            lastSynced.country === detected.country
+        );
+
+        const exactProfileMatch =
+          currentCode === detected.countryCode && currentCountry === detected.country;
+
+        if (exactProfileMatch || (profileHasKnownCountry && alreadySyncedThisDetected)) {
+          if (!alreadySyncedThisDetected) {
+            markUserCountrySynced(uid, detected);
+          }
+          countrySyncCompletedForKeyRef.current = syncKey;
+          return;
+        }
+
+        const updatedProfile = await syncUserCountry(detected);
+        markUserCountrySynced(uid, detected);
+        countrySyncCompletedForKeyRef.current = syncKey;
+        if (!cancelled && updatedProfile) {
+          setProfile((prev) => (prev && prev.uid === updatedProfile.uid ? updatedProfile : prev));
+          setRawUsers((prev) =>
+            prev.map((u) => (u.uid === updatedProfile.uid ? updatedProfile : u))
+          );
         }
       } catch {
         // Non-blocking: user can still pick country manually in ProfilePanel
+      } finally {
+        if (countrySyncInFlightUidRef.current === uid) {
+          countrySyncInFlightUidRef.current = null;
+        }
       }
     };
 
@@ -403,7 +443,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       cancelled = true;
     };
-  }, [authReady, authUser?.uid, profile]);
+  }, [authReady, authUser?.uid, profileUid, profileCountry, profileCountryCode, geoDetectionTick]);
 
   useEffect(() => {
     if (!authReady || !authUser?.uid) return;

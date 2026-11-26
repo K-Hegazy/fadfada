@@ -234,8 +234,9 @@ function sanitizeCountryPayload(raw) {
 }
 
 function isUnknownCountryCodeAttrError(err) {
-  const msg = String(err?.message || '');
-  return err?.code === 400 && msg.includes('countryCode');
+  const msg = String(err?.message || '').toLowerCase();
+  const isValidationErr = err?.code === 400 || err?.type === 'document_invalid_structure';
+  return isValidationErr && msg.includes('countrycode');
 }
 
 async function createUserRowWithCountryFallback(tablesDB, params) {
@@ -707,7 +708,20 @@ export async function handleEconomyAction(ctx) {
       if (acceptedTermsFlag && !existing.acceptedTerms) {
         updates.acceptedTerms = true;
       }
-      profileRow = await tablesDB.updateRow({
+      const existingCleanCountry = sanitizeCountryPayload({
+        country: existing.country,
+        countryCode: existing.countryCode,
+        countryFlag: existing.countryFlag,
+      });
+      const detectedCleanCountry = payload.detectedCountry
+        ? sanitizeCountryPayload(payload.detectedCountry)
+        : { country: '', countryCode: '', countryFlag: '' };
+      if (!existingCleanCountry.country && detectedCleanCountry.country) {
+        updates.country = detectedCleanCountry.country;
+        updates.countryCode = detectedCleanCountry.countryCode;
+        updates.countryFlag = detectedCleanCountry.countryFlag;
+      }
+      profileRow = await updateUserRowWithCountryFallback(tablesDB, {
         databaseId,
         tableId: tables.users,
         rowId: callerUid,

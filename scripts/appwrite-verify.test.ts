@@ -1461,7 +1461,7 @@ test('IP Geolocation detects country via HTTPS, supports fallback & timeout, cac
   assert.deepEqual(cached, first);
   assert.equal(calls, 1);
 
-  // 2. Primary fails/times out -> falls back to ipapi.co
+  // 2. Primary fails/times out -> falls back to api.country.is
   resetGeolocationCacheForTests();
   const hitUrls: string[] = [];
   const fallbackFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1470,30 +1470,29 @@ test('IP Geolocation detects country via HTTPS, supports fallback & timeout, cac
     if (url.includes('ipwho.is')) {
       return new Response('rate limited', { status: 429 });
     }
-    if (url.includes('ipapi.co')) {
+    if (url.includes('country.is')) {
       assert.equal(init?.cache, 'no-store');
       return new Response(
         JSON.stringify({
           ip: '5.6.7.8',
-          country_code: 'SA',
-          country_name: 'Saudi Arabia',
+          country: 'SA',
         }),
         { status: 200 }
       );
     }
-    throw new Error('Unexpected provider');
+    throw new Error(`Unexpected provider: ${url}`);
   }) as unknown as typeof fetch;
 
   const fallbackRes = await detectUserCountry({ fetchImpl: fallbackFetch, forceRefresh: true });
   assert.deepEqual(fallbackRes, { country: 'السعودية', countryCode: 'SA', countryFlag: '🇸🇦' });
   assert.equal(hitUrls.length, 2);
 
-  // 3. Primary + Fallback1 fail -> Fallback2 (api.country.is) + Arabic Intl fallback
+  // 3. Primary + Fallback1 fail -> Fallback2 (get.geojs.io) + Arabic Intl fallback
   resetGeolocationCacheForTests();
   const secondFallbackFetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes('country.is')) {
-      return new Response(JSON.stringify({ ip: '1.2.3.4', country: 'DE' }), { status: 200 });
+    if (url.includes('geojs.io')) {
+      return new Response(JSON.stringify({ ip: '1.2.3.4', country: 'DE', name: 'Germany' }), { status: 200 });
     }
     return new Response('{}', { status: 503 });
   }) as unknown as typeof fetch;
@@ -1525,9 +1524,25 @@ test('IP Geolocation detects country via HTTPS, supports fallback & timeout, cac
 test('Server-side syncUserCountry stores country safely, blocks cross-user writes (403), and grants no guest privileges', async () => {
   const env = createInMemoryEnv();
   env.authUsers.set('mem_geo', { $id: 'mem_geo', email: 'geo@example.com', name: 'GeoMember', emailVerification: true, labels: [] });
+  env.authUsers.set('mem_legacy', { $id: 'mem_legacy', email: 'legacy@example.com', name: 'LegacyMember', emailVerification: true, labels: [] });
   env.authUsers.set('guest_geo', { $id: 'guest_geo', email: '', name: '', emailVerification: false, labels: [] });
 
-  // ensureProfile attaches detectedCountry cleanly for registered members without storing IP
+  // Existing user with empty country gets detectedCountry populated on ensureProfile login
+  await handleEconomyAction(env.economyCtx('mem_legacy', 'ensureProfile'));
+  let legacyRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_legacy' });
+  assert.equal(legacyRow.country, '');
+  await handleEconomyAction(
+    env.economyCtx('mem_legacy', 'ensureProfile', {
+      detectedCountry: { country: 'الكويت', countryCode: 'KW', countryFlag: '🇰🇼', ip: '8.8.8.8' },
+    })
+  );
+  legacyRow = await env.tablesDB.getRow({ databaseId: 'fadfada_db', tableId: 'users', rowId: 'mem_legacy' });
+  assert.equal(legacyRow.country, 'الكويت');
+  assert.equal(legacyRow.countryCode, 'KW');
+  assert.equal(legacyRow.countryFlag, '🇰🇼');
+  assert.equal('ip' in legacyRow, false);
+
+  // ensureProfile attaches detectedCountry cleanly for new registered members without storing IP
   await handleEconomyAction(
     env.economyCtx('mem_geo', 'ensureProfile', {
       detectedCountry: { country: 'مصر', countryCode: 'EG', countryFlag: '🇪🇬', ip: '1.2.3.4' },
