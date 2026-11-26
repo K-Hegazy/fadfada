@@ -53,7 +53,7 @@ import {
   formatRelativeLastSeen,
   timestampToMillis,
 } from '../utils/formatters';
-import { CHAT_THEMES } from '../utils/progression';
+import { CHAT_THEMES, sortOnlineUsers } from '../utils/progression';
 import { Avatar } from './Avatar';
 import { MediaViewerModal } from './MediaViewerModal';
 import { EmptyState, SectionSkeleton } from './ui/Primitives';
@@ -239,9 +239,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }, [authUser, effectivePeerId]);
 
   if (!authUser || !effectivePeerId) {
-    const quickPeers = users
-      .filter((u) => u.uid !== authUser?.uid && isPeerOnline(u, isStaff))
-      .slice(0, 6);
+    const quickPeers = sortOnlineUsers(
+      users.filter((u) => u.uid !== authUser?.uid && isPeerOnline(u, isStaff)),
+      profile,
+      (u) => isPeerOnline(u, isStaff),
+      getPeerLastSeenMillis
+    ).slice(0, 6);
     return (
       <section className="hidden md:flex flex-1 flex-col items-center justify-center p-6 text-center bg-[#F2F4F7] dark:bg-[#0B1114]">
         <div className="w-full max-w-md space-y-3.5">

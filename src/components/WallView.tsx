@@ -30,7 +30,7 @@ import { uploadImageAsset } from '../services/storage';
 import { useApp } from '../state/AppContext';
 import type { Room, SimpleMessage, WallPost } from '../types/fadfada';
 import { formatArabicTime, timestampToMillis } from '../utils/formatters';
-import { CHAT_THEMES, displayCountryName, isKnownCountry, VIP_LABELS } from '../utils/progression';
+import { CHAT_THEMES, displayCountryName, isKnownCountry, sortOnlineUsers, VIP_LABELS } from '../utils/progression';
 import { AdSlot } from './AdSlot';
 import { Avatar } from './Avatar';
 import { MegaphoneBar } from './MegaphoneBar';
@@ -137,6 +137,7 @@ export const WallView: React.FC = () => {
     shoutouts,
     isStaff,
     isPeerOnline,
+    getPeerLastSeenMillis,
     openProfileModal,
     openChatWith,
     setActiveSection,
@@ -165,10 +166,13 @@ export const WallView: React.FC = () => {
 
   const onlineMembers = useMemo(
     () =>
-      users
-        .filter((u) => u.uid !== profile?.uid && isPeerOnline(u, isStaff))
-        .slice(0, 20),
-    [users, profile?.uid, isPeerOnline, isStaff]
+      sortOnlineUsers(
+        users.filter((u) => u.uid !== profile?.uid && isPeerOnline(u, isStaff)),
+        profile,
+        (u) => isPeerOnline(u, isStaff),
+        getPeerLastSeenMillis
+      ).slice(0, 20),
+    [users, profile, isPeerOnline, getPeerLastSeenMillis, isStaff]
   );
 
   const onlineTotalCount = useMemo(

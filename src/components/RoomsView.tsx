@@ -43,7 +43,7 @@ import { uploadChatImage, uploadChatVideo, uploadChatVoice } from '../services/s
 import { useApp } from '../state/AppContext';
 import type { Room, SimpleMessage } from '../types/fadfada';
 import { formatArabicTime, formatDurationMmSs } from '../utils/formatters';
-import { CHAT_THEMES, displayCountryName, VIP_LABELS } from '../utils/progression';
+import { CHAT_THEMES, displayCountryName, sortOnlineUsers, VIP_LABELS } from '../utils/progression';
 import { Avatar } from './Avatar';
 import { MediaViewerModal } from './MediaViewerModal';
 import { EmptyState, FeedbackBanner, PageHeader } from './ui/Primitives';
@@ -60,6 +60,7 @@ export const RoomsView: React.FC = () => {
     siteSettings,
     isStaff,
     isPeerOnline,
+    getPeerLastSeenMillis,
     openProfileModal,
     openChatWith,
     setActiveSection,
@@ -236,8 +237,14 @@ export const RoomsView: React.FC = () => {
   }, [messages.length]);
 
   const onlineDirectorySample = useMemo(
-    () => users.filter((u) => isPeerOnline(u, isStaff)).slice(0, 30),
-    [users, isPeerOnline, isStaff]
+    () =>
+      sortOnlineUsers(
+        users.filter((u) => isPeerOnline(u, isStaff)),
+        profile,
+        (u) => isPeerOnline(u, isStaff),
+        getPeerLastSeenMillis
+      ).slice(0, 30),
+    [users, profile, isPeerOnline, getPeerLastSeenMillis, isStaff]
   );
 
   const filteredRooms = useMemo(() => {

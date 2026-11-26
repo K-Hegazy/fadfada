@@ -513,13 +513,19 @@ export async function cleanupAbandonedGuests({
   nowMs?: number;
   guestTtlMs?: number;
 }) {
+  const cutoffIso = new Date(nowMs - guestTtlMs).toISOString();
+  const guestQueries: unknown[] = [
+    Query.equal('role', 'guest'),
+    Query.equal('isAnonymous', true),
+    ...(typeof Query.lessThan === 'function' ? [Query.lessThan('lastSeen', cutoffIso)] : []),
+  ];
   const guests = await listAllRowsPaginated(
     tablesDB,
     databaseId,
     tables.users,
-    [Query.equal('role', 'guest'), Query.equal('isAnonymous', true)],
+    guestQueries,
     Query,
-    25
+    200
   );
 
   let scannedGuests = 0;

@@ -291,7 +291,13 @@ export function sortOnlineUsers(
     return 1; // Other known countries next
   };
 
+  const isPinnedOnlineOwner = (u: UserProfile): boolean =>
+    u.role === 'owner' && isOnlineFn(u);
+
   return [...users].sort((a, b) => {
+    const ownerDiff = Number(isPinnedOnlineOwner(b)) - Number(isPinnedOnlineOwner(a));
+    if (ownerDiff !== 0) return ownerDiff;
+
     const groupDiff = getCountryGroupRank(a) - getCountryGroupRank(b);
     if (groupDiff !== 0) return groupDiff;
 

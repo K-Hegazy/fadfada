@@ -92,6 +92,81 @@ function createInMemoryEnv() {
     return map;
   };
 
+  const UNIQUE_COLUMNS_BY_TABLE: Record<string, string[]> = {
+    [TABLES.users]: ['username'],
+    [TABLES.conversations]: ['pairKey'],
+    [TABLES.dailyClaims]: ['claimKey'],
+    [TABLES.relationships]: ['pairKey'],
+    [TABLES.marriages]: ['pairKey'],
+  };
+
+  // O(1) unique index tracking per table+column so 10,000+ row stress tests run cleanly
+  const uniqueIndex = new Map<string, Map<string, Map<unknown, string>>>();
+  const getColIndex = (tableId: string, col: string) => {
+    let tMap = uniqueIndex.get(tableId);
+    if (!tMap) {
+      tMap = new Map();
+      uniqueIndex.set(tableId, tMap);
+    }
+    let cMap = tMap.get(col);
+    if (!cMap) {
+      cMap = new Map();
+      tMap.set(col, cMap);
+    }
+    return cMap;
+  };
+
+  const assertAndIndexUnique = (
+    tableId: string,
+    rowId: string,
+    candidateRow: Record<string, unknown>,
+    previousRow?: Record<string, unknown>
+  ) => {
+    const uniqueCols = UNIQUE_COLUMNS_BY_TABLE[tableId];
+    if (!uniqueCols || uniqueCols.length === 0) return;
+    for (const col of uniqueCols) {
+      const val = candidateRow[col];
+      if (val === undefined || val === null || val === '') continue;
+      const cMap = getColIndex(tableId, col);
+      const ownerId = cMap.get(val);
+      if (ownerId !== undefined && ownerId !== rowId) {
+        const err = new Error(
+          'Row violates a unique column constraint. Try again with different value(s).'
+        ) as Error & { code: number; type: string };
+        err.code = 409;
+        err.type = 'document_already_exists';
+        throw err;
+      }
+    }
+    for (const col of uniqueCols) {
+      const cMap = getColIndex(tableId, col);
+      if (previousRow) {
+        const prevVal = previousRow[col];
+        if (prevVal !== undefined && prevVal !== null && prevVal !== '' && cMap.get(prevVal) === rowId) {
+          cMap.delete(prevVal);
+        }
+      }
+      const nextVal = candidateRow[col];
+      if (nextVal !== undefined && nextVal !== null && nextVal !== '') {
+        cMap.set(nextVal, rowId);
+      }
+    }
+  };
+
+  const unindexUnique = (tableId: string, rowId: string, existingRow?: Record<string, unknown>) => {
+    const uniqueCols = UNIQUE_COLUMNS_BY_TABLE[tableId];
+    if (!uniqueCols || !existingRow) return;
+    for (const col of uniqueCols) {
+      const prevVal = existingRow[col];
+      if (prevVal !== undefined && prevVal !== null && prevVal !== '') {
+        const cMap = getColIndex(tableId, col);
+        if (cMap.get(prevVal) === rowId) {
+          cMap.delete(prevVal);
+        }
+      }
+    }
+  };
+
   const tablesDB = {
     async getRow({ tableId, rowId }: { databaseId: string; tableId: string; rowId: string }) {
       const row = ensureTable(tableId).get(rowId);
@@ -110,7 +185,7 @@ function createInMemoryEnv() {
       tableId: string;
       queries?: Array<{ type: string; field?: string; value?: unknown; limit?: number }>;
     }) {
-      let rows = Array.from(ensureTable(tableId).values()).map((r) => structuredClone(r));
+      let rows = Array.from(ensureTable(tableId).values());
       let limit = 100;
       let cursorId: string | null = null;
       for (const q of queries) {
@@ -141,8 +216,8 @@ function createInMemoryEnv() {
         const idx = rows.findIndex((r) => r.$id === cursorId);
         rows = idx >= 0 ? rows.slice(idx + 1) : [];
       }
-      rows = rows.slice(0, limit);
-      return { total: rows.length, rows };
+      const sliced = rows.slice(0, limit).map((r) => structuredClone(r));
+      return { total: sliced.length, rows: sliced };
     },
     async createRow({ tableId, rowId, data, permissions }: { databaseId: string; tableId: string; rowId: string; data: Record<string, unknown>; permissions?: string[] }) {
       const map = ensureTable(tableId);
@@ -154,6 +229,7 @@ function createInMemoryEnv() {
       }
       const now = new Date().toISOString();
       const row = { $id: id, $createdAt: now, $updatedAt: now, $permissions: permissions ?? [], ...structuredClone(data) };
+      assertAndIndexUnique(tableId, id, row);
       map.set(id, row);
       return structuredClone(row);
     },
@@ -166,6 +242,7 @@ function createInMemoryEnv() {
         throw err;
       }
       const updated = { ...existing, ...structuredClone(data), $updatedAt: new Date().toISOString() };
+      assertAndIndexUnique(tableId, rowId, updated, existing);
       map.set(rowId, updated);
       return structuredClone(updated);
     },
@@ -179,13 +256,17 @@ function createInMemoryEnv() {
           ...(permissions ? { $permissions: permissions } : {}),
           $updatedAt: new Date().toISOString(),
         };
+        assertAndIndexUnique(tableId, rowId, updated, existing);
         map.set(rowId, updated);
         return structuredClone(updated);
       }
       return await tablesDB.createRow({ databaseId: 'fadfada_db', tableId, rowId, data, permissions });
     },
     async deleteRow({ tableId, rowId }: { databaseId: string; tableId: string; rowId: string }) {
-      ensureTable(tableId).delete(rowId);
+      const map = ensureTable(tableId);
+      const existing = map.get(rowId);
+      unindexUnique(tableId, rowId, existing);
+      map.delete(rowId);
     },
   };
 
@@ -1634,5 +1715,409 @@ test('sortOnlineUsers matches by countryCode as well as country name while prese
 
   assert.deepEqual(sorted, ['same_f', 'same_m', 'other_f', 'other_m', 'unk_m']);
 });
+
+test('Guest ensureProfile never collides on users.username for shared Appwrite ID prefixes, concurrent logins, or forced 409 retries', async () => {
+  const env = createInMemoryEnv();
+
+  // Simulate Appwrite ID.unique() guest IDs created within the same ~4 minute window
+  // (sharing the exact same leading 12+ hex characters).
+  const sharedPrefixGuestIds = [
+    '6b082c8bb6f43cc221eb',
+    '6b082c8bb6f43cc299ff',
+    '6b082c8bb6f43cc2aaaa',
+    '6b082c8bb6f43cc2bbbb',
+  ];
+
+  const seedGuestAuth = (uid: string) => {
+    env.authUsers.set(uid, {
+      $id: uid,
+      email: '',
+      name: '',
+      emailVerification: false,
+      labels: [],
+    });
+  };
+
+  for (const uid of sharedPrefixGuestIds) {
+    seedGuestAuth(uid);
+  }
+
+  // Concurrent entry for multiple guests with the same leading timestamp prefix
+  const results = await Promise.all(
+    sharedPrefixGuestIds.map((uid, idx) =>
+      handleEconomyAction(
+        env.economyCtx(uid, 'ensureProfile', {
+          guestProfile: {
+            displayName: `ضيف متزامن ${idx + 1}`,
+            age: 22 + idx,
+            gender: idx % 2 === 0 ? 'male' : 'female',
+            acceptedTerms: true,
+          },
+        })
+      )
+    )
+  );
+
+  const usernames = results.map((r) => String(r.username));
+  assert.equal(new Set(usernames).size, sharedPrefixGuestIds.length, 'Every guest must receive a unique username');
+  for (const r of results) {
+    assert.equal(r.role, 'guest');
+    assert.equal(r.coins, 0);
+    assert.match(String(r.username), /^[a-z0-9_.]{3,30}$/);
+  }
+
+  // Re-entering as an existing guest preserves their assigned username untouched
+  const originalUsername = String(results[0].username);
+  const revisit = await handleEconomyAction(
+    env.economyCtx(sharedPrefixGuestIds[0], 'ensureProfile', {
+      guestProfile: {
+        displayName: 'ضيف محدث',
+        age: 25,
+        gender: 'male',
+        acceptedTerms: true,
+      },
+    })
+  );
+  assert.equal(revisit.username, originalUsername, 'Existing guest username must remain unchanged');
+  assert.equal(revisit.displayName, 'ضيف محدث');
+
+  // Forced unique column constraint 409 on attempt 0 recovers cleanly on retry
+  const retryGuestId = '6b082c8bb6f43cc2cccc';
+  seedGuestAuth(retryGuestId);
+  const baseCreateRow = env.tablesDB.createRow.bind(env.tablesDB);
+  let usersCreateCalls = 0;
+  env.tablesDB.createRow = async (params: Parameters<typeof baseCreateRow>[0]) => {
+    if (params.tableId === TABLES.users && params.rowId === retryGuestId) {
+      usersCreateCalls += 1;
+      if (usersCreateCalls === 1) {
+        const err = new Error(
+          'Row violates a unique column constraint. Try again with different value(s).'
+        ) as Error & { code: number; type: string };
+        err.code = 409;
+        err.type = 'document_already_exists';
+        throw err;
+      }
+    }
+    return baseCreateRow(params);
+  };
+
+  const retriedProfile = await handleEconomyAction(
+    env.economyCtx(retryGuestId, 'ensureProfile', {
+      guestProfile: {
+        displayName: 'ضيف إعادة المحاولة',
+        age: 24,
+        gender: 'female',
+        acceptedTerms: true,
+      },
+    })
+  );
+  assert.equal(usersCreateCalls, 2, 'Should retry users.createRow after a 409 unique constraint error');
+  assert.match(String(retriedProfile.username), /^[a-z0-9_.]{3,30}$/);
+
+  // Concurrent ensureProfile calls for the exact same guest uid also succeed cleanly
+  env.tablesDB.createRow = baseCreateRow;
+  const sameGuestId = '6b082c8bb6f43cc2dddd';
+  seedGuestAuth(sameGuestId);
+  const sameGuestCalls = await Promise.all([
+    handleEconomyAction(
+      env.economyCtx(sameGuestId, 'ensureProfile', {
+        guestProfile: { displayName: 'ضيف مكرر', age: 26, gender: 'male', acceptedTerms: true },
+      })
+    ),
+    handleEconomyAction(
+      env.economyCtx(sameGuestId, 'ensureProfile', {
+        guestProfile: { displayName: 'ضيف مكرر', age: 26, gender: 'male', acceptedTerms: true },
+      })
+    ),
+  ]);
+  assert.equal(sameGuestCalls[0].uid, sameGuestId);
+  assert.equal(sameGuestCalls[1].uid, sameGuestId);
+});
+
+test('Online owner (role === owner) is pinned first in all online lists, removed when offline, and other users keep country/gender order', () => {
+  const nowMs = Date.now();
+  const freshIso = new Date(nowMs - 5_000).toISOString();
+  const staleIso = new Date(nowMs - 10 * 60 * 1000).toISOString();
+
+  const currentUser = { uid: 'viewer', country: 'مصر', countryCode: 'EG' } as UserProfile;
+
+  const baseRoster = [
+    {
+      uid: 'same_m',
+      username: 'owner', // decoy username must NOT pin a non-owner
+      displayName: 'المالك', // decoy displayName must NOT pin a non-owner
+      role: 'member' as const,
+      country: 'مصر',
+      countryCode: 'EG',
+      gender: 'male' as const,
+      isOnline: true,
+      lastSeen: freshIso,
+    },
+    {
+      uid: 'other_f',
+      username: 'sara',
+      displayName: 'سارة',
+      role: 'moderator' as const,
+      country: 'السعودية',
+      countryCode: 'SA',
+      gender: 'female' as const,
+      isOnline: true,
+      lastSeen: freshIso,
+    },
+    {
+      uid: 'owner_u',
+      username: 'hegazymr6', // non-"owner" username — identified strictly by role === 'owner'
+      displayName: 'مؤسس المنصة',
+      role: 'owner' as const,
+      country: '', // even with missing country & male gender, online owner comes first
+      countryCode: '',
+      gender: 'male' as const,
+      isOnline: true,
+      lastSeen: freshIso,
+    },
+    {
+      uid: 'same_f',
+      username: 'layla',
+      displayName: 'ليلى',
+      role: 'member' as const,
+      country: 'مصر',
+      countryCode: 'EG',
+      gender: 'female' as const,
+      isOnline: true,
+      lastSeen: freshIso,
+    },
+  ] as unknown as UserProfile[];
+
+  const getOnlineList = (roster: UserProfile[], clockMs = nowMs) =>
+    sortOnlineUsers(
+      roster.filter((u) => isUserPresenceOnline(u, clockMs)),
+      currentUser,
+      (u) => isUserPresenceOnline(u, clockMs),
+      (u) => Date.parse(String(u.lastSeen || '')) || 0
+    ).map((u) => u.uid);
+
+  // 1. Online owner appears first; decoy username/displayName is NOT pinned; others keep country/gender order
+  assert.deepEqual(getOnlineList(baseRoster), ['owner_u', 'same_f', 'same_m', 'other_f']);
+
+  // 2. When owner goes offline (isOnline = false), owner disappears completely and reserves no slot
+  const offlineOwnerRoster = baseRoster.map((u) =>
+    u.uid === 'owner_u' ? ({ ...u, isOnline: false } as UserProfile) : u
+  );
+  assert.deepEqual(getOnlineList(offlineOwnerRoster), ['same_f', 'same_m', 'other_f']);
+
+  // Even in mixed ("all users") sorting where offline rows remain, an offline owner must NOT be pinned to index 0
+  const mixedSorted = sortOnlineUsers(
+    offlineOwnerRoster,
+    currentUser,
+    (u) => isUserPresenceOnline(u, nowMs),
+    (u) => Date.parse(String(u.lastSeen || '')) || 0
+  ).map((u) => u.uid);
+  assert.equal(mixedSorted[0], 'same_f', 'Offline owner must never reserve position 0');
+
+  // 3. When owner presence TTL expires (stale lastSeen), owner disappears immediately without a slot reserved
+  const expiredOwnerRoster = baseRoster.map((u) =>
+    u.uid === 'owner_u' ? ({ ...u, isOnline: true, lastSeen: staleIso } as UserProfile) : u
+  );
+  assert.deepEqual(getOnlineList(expiredOwnerRoster), ['same_f', 'same_m', 'other_f']);
+
+  // 4. Owner returns online -> immediately returns to index 0
+  const backOnlineRoster = expiredOwnerRoster.map((u) =>
+    u.uid === 'owner_u' ? ({ ...u, isOnline: true, lastSeen: new Date(nowMs).toISOString() } as UserProfile) : u
+  );
+  assert.deepEqual(getOnlineList(backOnlineRoster), ['owner_u', 'same_f', 'same_m', 'other_f']);
+
+  // 5. All components displaying online user lists apply sortOnlineUsers
+  const onlineViewFiles = [
+    'src/components/OnlineDirectoryView.tsx',
+    'src/components/WallView.tsx',
+    'src/components/RoomsView.tsx',
+    'src/components/ChatPanel.tsx',
+  ];
+  for (const rel of onlineViewFiles) {
+    const content = fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8');
+    assert.ok(
+      content.includes('sortOnlineUsers('),
+      `${rel} must use sortOnlineUsers so the online owner is pinned across every online list`
+    );
+  }
+});
+
+test('High-scale stress test: 10,000+ concurrent guests receive unique usernames with zero collisions, safe retries, preserved existing usernames, and indexed cleanup', async () => {
+  const env = createInMemoryEnv();
+
+  // Seed existing member and existing guest whose usernames MUST remain untouched
+  env.authUsers.set('existing_mem_uid', {
+    $id: 'existing_mem_uid',
+    email: 'legacy@fadfada.app',
+    name: 'Legacy Member',
+    emailVerification: true,
+    labels: [],
+  });
+  await handleEconomyAction(env.economyCtx('existing_mem_uid', 'ensureProfile'));
+  await handleEconomyAction(
+    env.economyCtx('existing_mem_uid', 'updateProfile', {
+      username: 'legacy_custom_name',
+      displayName: 'عضو قديم',
+    })
+  );
+
+  env.authUsers.set('existing_guest_uid', {
+    $id: 'existing_guest_uid',
+    email: '',
+    name: '',
+    emailVerification: false,
+    labels: [],
+  });
+  const preExistingGuest = await handleEconomyAction(
+    env.economyCtx('existing_guest_uid', 'ensureProfile', {
+      guestProfile: { displayName: 'ضيف سابق', age: 23, gender: 'male', acceptedTerms: true },
+    })
+  );
+  const preservedGuestUsername = String(preExistingGuest.username);
+
+  // Simulate 10,000 guests created in 20 concurrent waves of 500 parallel logins,
+  // all sharing the same leading 12 hex timestamp prefix (like Appwrite ID.unique() bursts).
+  const TOTAL_GUESTS = 10_000;
+  const BATCH_SIZE = 500;
+  const generatedUsernames: string[] = [];
+
+  for (let start = 0; start < TOTAL_GUESTS; start += BATCH_SIZE) {
+    const batchPromises: Array<Promise<Record<string, unknown>>> = [];
+    for (let i = start; i < start + BATCH_SIZE; i += 1) {
+      const uid = `6b082c8bb6f4${i.toString(16).padStart(8, '0')}`;
+      env.authUsers.set(uid, {
+        $id: uid,
+        email: '',
+        name: '',
+        emailVerification: false,
+        labels: [],
+      });
+      batchPromises.push(
+        handleEconomyAction(
+          env.economyCtx(uid, 'ensureProfile', {
+            guestProfile: {
+              displayName: `ضيف ${i + 1}`,
+              age: 18 + (i % 50),
+              gender: i % 2 === 0 ? 'male' : 'female',
+              acceptedTerms: true,
+            },
+          })
+        )
+      );
+    }
+    const batchResults = await Promise.all(batchPromises);
+    for (const row of batchResults) {
+      const uname = String(row.username || '');
+      assert.match(uname, /^[a-z0-9_.]{3,30}$/);
+      generatedUsernames.push(uname);
+    }
+  }
+
+  assert.equal(generatedUsernames.length, TOTAL_GUESTS);
+  assert.equal(
+    new Set(generatedUsernames).size,
+    TOTAL_GUESTS,
+    'All 10,000 concurrent guests must get distinct unique usernames'
+  );
+  assert.equal(
+    env.db.get(TABLES.users)?.size,
+    TOTAL_GUESTS + 2,
+    'Total user rows must equal 10,000 guests + 2 existing users with zero duplicates'
+  );
+
+  // Verify existing member and existing guest kept their exact original usernames
+  const legacyAfter = await env.tablesDB.getRow({
+    databaseId: 'fadfada_db',
+    tableId: TABLES.users,
+    rowId: 'existing_mem_uid',
+  });
+  assert.equal(legacyAfter.username, 'legacy_custom_name');
+
+  const guestRevisit = await handleEconomyAction(
+    env.economyCtx('existing_guest_uid', 'ensureProfile', {
+      guestProfile: { displayName: 'ضيف سابق محدث', age: 24, gender: 'male', acceptedTerms: true },
+    })
+  );
+  assert.equal(guestRevisit.username, preservedGuestUsername);
+
+  // Concurrent duplicate ensureProfile calls for 100 existing guests produce 0 duplicates and preserve usernames
+  const dupPromises: Array<Promise<Record<string, unknown>>> = [];
+  for (let i = 0; i < 100; i += 1) {
+    const uid = `6b082c8bb6f4${i.toString(16).padStart(8, '0')}`;
+    const payload = {
+      guestProfile: { displayName: `ضيف ${i + 1}`, age: 20, gender: 'male', acceptedTerms: true },
+    };
+    dupPromises.push(handleEconomyAction(env.economyCtx(uid, 'ensureProfile', payload)));
+    dupPromises.push(handleEconomyAction(env.economyCtx(uid, 'ensureProfile', payload)));
+  }
+  const dupResults = await Promise.all(dupPromises);
+  for (let i = 0; i < 100; i += 1) {
+    assert.equal(dupResults[i * 2].username, generatedUsernames[i]);
+    assert.equal(dupResults[i * 2 + 1].username, generatedUsernames[i]);
+  }
+  assert.equal(env.db.get(TABLES.users)?.size, TOTAL_GUESTS + 2);
+
+  // Multi-attempt forced 409 unique constraint collisions (3 consecutive failures -> recovers on 4th)
+  const heavyRetryUid = '6b082c8bb6f4ffffffff';
+  env.authUsers.set(heavyRetryUid, {
+    $id: heavyRetryUid,
+    email: '',
+    name: '',
+    emailVerification: false,
+    labels: [],
+  });
+  const baseCreateRow = env.tablesDB.createRow.bind(env.tablesDB);
+  let forcedAttempts = 0;
+  env.tablesDB.createRow = async (params: Parameters<typeof baseCreateRow>[0]) => {
+    if (params.tableId === TABLES.users && params.rowId === heavyRetryUid && forcedAttempts < 3) {
+      forcedAttempts += 1;
+      const err = new Error(
+        'Row violates a unique column constraint. Try again with different value(s).'
+      ) as Error & { code: number; type: string };
+      err.code = 409;
+      err.type = 'document_already_exists';
+      throw err;
+    }
+    return baseCreateRow(params);
+  };
+  const recovered = await handleEconomyAction(
+    env.economyCtx(heavyRetryUid, 'ensureProfile', {
+      guestProfile: { displayName: 'ضيف تعافي', age: 22, gender: 'female', acceptedTerms: true },
+    })
+  );
+  env.tablesDB.createRow = baseCreateRow;
+  assert.equal(forcedAttempts, 3);
+  assert.match(String(recovered.username), /^[a-z0-9_.]{3,30}$/);
+  assert.equal(new Set(generatedUsernames).has(String(recovered.username)), false);
+
+  // Indexed abandoned-guest cleanup at 10,000+ users scale:
+  // Mark 500 guests as stale while keeping 9,501+ active guests and the permanent member intact.
+  const nowMs = Date.now() + 60_000;
+  const staleIso = new Date(nowMs - 30 * 60 * 1000).toISOString();
+  const STALE_COUNT = 500;
+  for (let i = 0; i < STALE_COUNT; i += 1) {
+    const uid = `6b082c8bb6f4${i.toString(16).padStart(8, '0')}`;
+    await env.tablesDB.updateRow({
+      databaseId: 'fadfada_db',
+      tableId: TABLES.users,
+      rowId: uid,
+      data: { lastSeen: staleIso },
+    });
+  }
+  const cleanupRes = await cleanupAbandonedGuests({
+    tablesDB: env.tablesDB,
+    usersApi: env.usersApi,
+    databaseId: 'fadfada_db',
+    tables: TABLES,
+    Query: env.Query,
+    nowMs,
+    guestTtlMs: 15 * 60 * 1000,
+  });
+  assert.equal(cleanupRes.deletedGuests, STALE_COUNT);
+  assert.equal(env.db.get(TABLES.users)?.has('existing_mem_uid'), true);
+});
+
+
+
 
 

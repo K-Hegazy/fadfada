@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 export const BOOTSTRAPPED_OWNER_EMAIL = 'owner@fadfada.app';
 export const BOOTSTRAPPED_OWNER_EMAILS = ['owner@fadfada.app', 'hegazymr6@gmail.com'];
 
@@ -91,17 +93,41 @@ function parseJson(val, fallback) {
   }
 }
 
-function buildSafeUsername(user) {
+let usernameEntropySeq = 0;
+
+function hexToFixedBase36(hexStr, length) {
+  const mod = 36n ** BigInt(length);
+  const val = BigInt(`0x${hexStr}`) % mod;
+  return val.toString(36).padStart(length, '0');
+}
+
+function buildSafeUsername(user, attempt = 0) {
   const baseFromEmail = user.email ? String(user.email).split('@')[0] : '';
   const baseFromName = user.name ? String(user.name) : '';
   const isAnon = !user.email;
   const raw = (baseFromEmail || baseFromName || (isAnon ? 'guest' : 'user'))
     .toLowerCase()
     .replace(/[^a-z0-9_.]/g, '')
-    .slice(0, 18);
+    .slice(0, 8);
   const prefix = raw.length >= 3 ? raw : isAnon ? 'guest' : 'fadfada';
-  const suffix = String(user.$id).slice(0, 6).toLowerCase().replace(/[^a-z0-9]/g, '0');
-  return `${prefix}_${suffix}`.slice(0, 30);
+
+  const fullUserId = String(user.$id || '');
+  // Hash the ENTIRE user.$id + attempt so shared Appwrite timestamp prefixes never collide.
+  const idDigestHex = crypto
+    .createHash('sha256')
+    .update(`${fullUserId}:${attempt}`)
+    .digest('hex')
+    .slice(0, 16);
+  const idPart = hexToFixedBase36(idDigestHex, 11);
+
+  // Combine CSPRNG entropy with a monotonic sequence counter so concurrent calls never collide.
+  usernameEntropySeq = (usernameEntropySeq + 1) % 1679616; // 36^4
+  const randBudget = Math.max(8, 30 - (prefix.length + 1 + idPart.length + 1));
+  const csprngLen = Math.max(4, randBudget - 4);
+  const csprngPart = hexToFixedBase36(crypto.randomBytes(7).toString('hex'), csprngLen);
+  const seqPart = usernameEntropySeq.toString(36).padStart(4, '0');
+
+  return `${prefix}_${idPart}_${csprngPart}${seqPart}`.slice(0, 30);
 }
 
 function buildDisplayName(user) {
@@ -354,7 +380,12 @@ async function sweepAbandonedGuestsQuick({
     const res = await listRowsSafe(tablesDB, {
       databaseId,
       tableId: tables.users,
-      queries: [Query.equal('role', 'guest'), Query.limit(20)],
+      queries: [
+        Query.equal('role', 'guest'),
+        Query.equal('isAnonymous', true),
+        Query.lessThan('lastSeen', cutoffIso),
+        Query.limit(2),
+      ],
     });
     for (const row of res.rows || []) {
       const uid = String(row.uid || row.$id);
@@ -614,67 +645,99 @@ export async function handleEconomyAction(ctx) {
 
       const initialCountry = sanitizeCountryPayload(payload.detectedCountry || {});
       const role = isOwnerEmail ? 'owner' : isAnonymous ? 'guest' : 'member';
-      profileRow = await createUserRowWithCountryFallback(tablesDB, {
-        databaseId,
-        tableId: tables.users,
-        rowId: callerUid,
-        data: {
-          uid: callerUid,
-          username: buildSafeUsername(authUser),
-          displayName: initialDisplayName,
-          avatar: '',
-          cover: '',
-          bio: isAnonymous ? 'ضيف في منصة فضفضة' : 'عضو جديد في فضفضة',
-          gender: initialGender,
-          age: initialAge,
-          country: initialCountry.country,
-          countryCode: initialCountry.countryCode,
-          countryFlag: initialCountry.countryFlag,
-          maritalStatus: 'single',
-          partnerUid: '',
-          partnerName: '',
-          affiliation: '',
-          role,
-          permissions: isOwnerEmail ? ['*'] : [],
-          isBanned: false,
-          banReason: '',
-          level: 1,
-          xp: 0,
-          coins: isOwnerEmail ? 5000 : isAnonymous ? 0 : 50,
-          lastClaimKey: '',
-          giftsSentCount: 0,
-          giftsReceivedCount: 0,
-          likesCount: 0,
-          visitsCount: 0,
-          friendsCount: 0,
-          vipTier: 'none',
-          vipExpiresAt: 0,
-          frameId: 'none',
-          nameColor: '',
-          isNamePinned: false,
-          unlockedFeatures: [],
-          badgesJson: '[]',
-          ghostMode: false,
-          hideLastSeen: false,
-          privacyJson: JSON.stringify({
-            messagePermission: 'everyone',
-            showOnline: true,
-            soundNotifications: true,
-            visualNotifications: true,
-          }),
-          isOnline: true,
-          isAnonymous,
-          acceptedTerms: isAnonymous ? Boolean(guestProfile?.acceptedTerms) : Boolean(payload.acceptedTerms ?? true),
-          isPublic: true,
-          freeMatchesUsedToday: 0,
-          lastMatchDate: '',
-          dailyMessagesSent: 0,
-          lastMessageDate: '',
-          createdAt: nowIso,
-          lastSeen: nowIso,
-        },
-        permissions: [Permission.read(Role.users())],
-      });
+      const baseRowData = {
+        uid: callerUid,
+        displayName: initialDisplayName,
+        avatar: '',
+        cover: '',
+        bio: isAnonymous ? 'ضيف في منصة فضفضة' : 'عضو جديد في فضفضة',
+        gender: initialGender,
+        age: initialAge,
+        country: initialCountry.country,
+        countryCode: initialCountry.countryCode,
+        countryFlag: initialCountry.countryFlag,
+        maritalStatus: 'single',
+        partnerUid: '',
+        partnerName: '',
+        affiliation: '',
+        role,
+        permissions: isOwnerEmail ? ['*'] : [],
+        isBanned: false,
+        banReason: '',
+        level: 1,
+        xp: 0,
+        coins: isOwnerEmail ? 5000 : isAnonymous ? 0 : 50,
+        lastClaimKey: '',
+        giftsSentCount: 0,
+        giftsReceivedCount: 0,
+        likesCount: 0,
+        visitsCount: 0,
+        friendsCount: 0,
+        vipTier: 'none',
+        vipExpiresAt: 0,
+        frameId: 'none',
+        nameColor: '',
+        isNamePinned: false,
+        unlockedFeatures: [],
+        badgesJson: '[]',
+        ghostMode: false,
+        hideLastSeen: false,
+        privacyJson: JSON.stringify({
+          messagePermission: 'everyone',
+          showOnline: true,
+          soundNotifications: true,
+          visualNotifications: true,
+        }),
+        isOnline: true,
+        isAnonymous,
+        acceptedTerms: isAnonymous ? Boolean(guestProfile?.acceptedTerms) : Boolean(payload.acceptedTerms ?? true),
+        isPublic: true,
+        freeMatchesUsedToday: 0,
+        lastMatchDate: '',
+        dailyMessagesSent: 0,
+        lastMessageDate: '',
+        createdAt: nowIso,
+        lastSeen: nowIso,
+      };
+
+      const isUniqueConstraintErr = (err) => {
+        const msg = String(err?.message || '').toLowerCase();
+        const type = String(err?.type || '');
+        return (
+          err?.code === 409 ||
+          type === 'document_already_exists' ||
+          type === 'row_already_exists' ||
+          msg.includes('unique') ||
+          msg.includes('already exists') ||
+          msg.includes('duplicate')
+        );
+      };
+
+      const MAX_PROFILE_CREATE_ATTEMPTS = 8;
+      for (let attempt = 0; attempt < MAX_PROFILE_CREATE_ATTEMPTS; attempt += 1) {
+        try {
+          profileRow = await createUserRowWithCountryFallback(tablesDB, {
+            databaseId,
+            tableId: tables.users,
+            rowId: callerUid,
+            data: {
+              ...baseRowData,
+              username: buildSafeUsername(authUser, attempt),
+            },
+            permissions: [Permission.read(Role.users())],
+          });
+          break;
+        } catch (err) {
+          if (!isUniqueConstraintErr(err) || attempt === MAX_PROFILE_CREATE_ATTEMPTS - 1) {
+            throw err;
+          }
+          const raceExisting = await getRowOrNull(tablesDB, databaseId, tables.users, callerUid);
+          if (raceExisting) {
+            profileRow = raceExisting;
+            break;
+          }
+        }
+      }
     } else {
       const updates = {
         isOnline: true,
@@ -760,14 +823,16 @@ export async function handleEconomyAction(ctx) {
       })
       .catch(() => {});
 
-    await sweepAbandonedGuestsQuick({
-      tablesDB,
-      usersApi,
-      databaseId,
-      tables,
-      Query,
-      excludeUid: callerUid,
-    });
+    if (crypto.randomInt(0, 20) === 0) {
+      await sweepAbandonedGuestsQuick({
+        tablesDB,
+        usersApi,
+        databaseId,
+        tables,
+        Query,
+        excludeUid: callerUid,
+      });
+    }
 
     return profileRow;
   }
